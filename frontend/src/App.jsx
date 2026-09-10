@@ -111,48 +111,43 @@ function App() {
   }
 
   return (
-    <div className="app-layout">
-      {/* Navbar Lateral */}
-      <nav className="main-nav">
-        <div className="nav-brand">
-          COB
-        </div>
-        <div className="nav-items">
+    <div className="app-container fade-in">
+      {/* Sidebar Navigation */}
+      <div className="sidebar" style={{ width: '80px', alignItems: 'center', padding: '2rem 0', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2rem' }}>
+          <div className="status-dot"></div>
           <button 
-            className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
-            title="Dashboard"
+            onClick={() => { setActiveTab('dashboard'); setActiveChat(null); }}
+            style={{ background: 'none', border: 'none', color: activeTab === 'dashboard' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
+            title="Panel de Control"
           >
-            <Activity size={24} />
+            <Activity size={28} />
           </button>
           <button 
-            className={`nav-item ${activeTab === 'chats' ? 'active' : ''}`}
             onClick={() => setActiveTab('chats')}
+            style={{ background: 'none', border: 'none', color: activeTab === 'chats' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
             title="Chats"
           >
-            <MessageCircle size={24} />
+            <MessageCircle size={28} />
           </button>
           <button 
-            className={`nav-item ${activeTab === 'web-leads' ? 'active' : ''}`}
-            onClick={() => setActiveTab('web-leads')}
+            onClick={() => { setActiveTab('web-leads'); setActiveChat(null); }}
             title="Consultas Web Oficial"
-            style={{ position: 'relative' }}
+            style={{ position: 'relative', background: 'none', border: 'none', color: activeTab === 'web-leads' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
           >
-            <Globe size={24} />
+            <Globe size={28} />
             {newLeadsCount > 0 && (
               <span style={{
                 position: 'absolute',
-                top: '4px',
-                right: '4px',
+                top: '-5px',
+                right: '-5px',
                 background: '#ef4444',
                 color: 'white',
                 borderRadius: '999px',
                 fontSize: '0.65rem',
                 fontWeight: 'bold',
-                padding: '0.1rem 0.35rem',
-                minWidth: '16px',
-                textAlign: 'center',
-                boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)'
+                padding: '2px 6px',
+                textAlign: 'center'
               }}>
                 {newLeadsCount}
               </span>
@@ -160,34 +155,41 @@ function App() {
           </button>
         </div>
         
-        <div className="nav-footer">
-          <button className="nav-item" onClick={handleLogout} title="Cerrar Sesión">
-            <LogOut size={24} />
-          </button>
-        </div>
-      </nav>
+        <button 
+          onClick={handleLogout}
+          style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', transition: 'color 0.2s' }}
+          onMouseEnter={(e) => e.target.style.color = '#ef4444'}
+          onMouseLeave={(e) => e.target.style.color = 'var(--text-secondary)'}
+          title="Cerrar Sesión"
+        >
+          <LogOut size={28} />
+        </button>
+      </div>
 
-      {/* Main Content Area */}
-      {activeTab === 'dashboard' && <Dashboard />}
-
-      {activeTab === 'web-leads' && <WebLeads />}
-      
+      {/* Second Sidebar: Chat List */}
       {activeTab === 'chats' && (
-        <div className="workspace">
-          <ChatList 
+        <ChatList 
             chats={chats} 
             activeChat={activeChat} 
             setActiveChat={setActiveChat} 
-          />
-          {activeChat ? (
-            <ChatView chat={activeChat} />
-          ) : (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-              Selecciona una conversación para empezar
-            </div>
-          )}
-        </div>
+        />
       )}
+
+      {/* Main Area */}
+      <div className="main-area">
+        {activeTab === 'dashboard' ? (
+           <Dashboard />
+        ) : activeTab === 'web-leads' ? (
+           <WebLeads />
+        ) : activeChat ? (
+           <ChatView chat={activeChat} />
+        ) : (
+           <div className="empty-state fade-in">
+              <MessageCircle size={64} />
+              <p>Selecciona un chat para ver la conversación y escuchar audios.</p>
+           </div>
+        )}
+      </div>
     </div>
   );
 }
