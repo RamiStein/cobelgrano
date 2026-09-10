@@ -20,6 +20,22 @@ class ZernioService {
 
         console.log('[Zernio] Inicializando servicio...');
 
+        // Lectura inicial síncrona de Firestore
+        try {
+            const initialSnap = await getDoc(doc(db, 'system', 'zernio_config'));
+            if (initialSnap.exists()) {
+                const data = initialSnap.data();
+                this.apiKey = data.apiKey || process.env.ZERNIO_API_KEY || null;
+                this.profileId = data.profileId || null;
+                this.accountId = data.accountId || null;
+                this.status = data.status || 'disconnected';
+                this.phoneNumber = data.phoneNumber || null;
+                console.log(`[Zernio] Configuración cargada: accountId=${this.accountId}, status=${this.status}`);
+            }
+        } catch (e) {
+            console.warn('[Zernio] No se pudo leer config inicial:', e.message);
+        }
+
         // Escuchar configuración de Firestore en tiempo real
         onSnapshot(doc(db, 'system', 'zernio_config'), async (docSnap) => {
             if (docSnap.exists()) {
