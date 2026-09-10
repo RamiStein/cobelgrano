@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'react-qr-code';
-import { MessageCircle, Activity, Settings, User, LogOut, Globe, Megaphone } from 'lucide-react';
+import { MessageCircle, Activity, Settings, User, LogOut, Globe, Megaphone, Radio } from 'lucide-react';
 import './App.css';
 import Dashboard from './components/Dashboard';
 import ChatList from './components/ChatList';
 import ChatView from './components/ChatView';
 import WebLeads from './components/WebLeads';
 import Marketing from './components/Marketing';
+import Channels from './components/Channels';
 import Login from './components/Login';
 import { db, auth } from './firebase';
 import { doc, onSnapshot, collection, query, orderBy, limit, where, addDoc } from 'firebase/firestore';
@@ -18,8 +19,9 @@ function App() {
   });
   const [isReady, setIsReady] = useState(false);
   const [qrCode, setQrCode] = useState(null);
+  const [zernioStatus, setZernioStatus] = useState('disconnected');
   
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'chats', 'web-leads', 'marketing'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'chats', 'web-leads', 'marketing', 'channels'
   const [activeChat, setActiveChat] = useState(null);
   const [chats, setChats] = useState([]);
   const [newLeadsCount, setNewLeadsCount] = useState(0);
@@ -27,12 +29,20 @@ function App() {
   const sessionStartRef = useRef(null);
 
   useEffect(() => {
-    // Listen to system status for QR and Readiness
+    // Listen to system status for local WhatsApp Web QR and Readiness
     const unsubStatus = onSnapshot(doc(db, 'system', 'status'), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setIsReady(data.isReady);
-        setQrCode(data.qr);
+        setIsReady(!!data.isReady);
+        setQrCode(data.qr || null);
+      }
+    });
+
+    // Listen to Zernio official cloud connection status
+    const unsubZernio = onSnapshot(doc(db, 'system', 'zernio_config'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setZernioStatus(data.status || 'disconnected');
       }
     });
 
@@ -74,6 +84,7 @@ function App() {
 
     return () => {
       unsubStatus();
+      unsubZernio();
       unsubChats();
       unsubLeads();
       unsubAuth();
@@ -111,41 +122,23 @@ function App() {
     return <Login onAuthenticated={() => setIsAuthenticated(true)} />;
   }
 
-  if (!isReady && qrCode) {
-    return (
-      <div className="login-container">
-        <div className="login-card">
-          <div className="logo-container" style={{display: 'flex', justifyContent: 'center', marginBottom: '2rem'}}>
-             {/* Logo would go here */}
-          </div>
-          <h2>Conectar WhatsApp</h2>
-          <p>Escanea este código QR con la app de WhatsApp en tu teléfono para conectar el sistema.</p>
-          <div className="qr-wrapper">
-            <QRCode value={qrCode} size={256} />
-          </div>
-          <p style={{ marginTop: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-            Abre WhatsApp &gt; Dispositivos vinculados &gt; Vincular un dispositivo
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isReady && !qrCode) {
-    return (
-      <div className="loading-container">
-        <h2>Iniciando Sistema COB...</h2>
-        <p>Conectando con WhatsApp, por favor espera.</p>
-      </div>
-    );
-  }
+  const isConnected = zernioStatus === 'connected' || isReady;
 
   return (
     <div className="app-container fade-in">
       {/* Sidebar Navigation */}
       <div className="sidebar" style={{ width: '80px', alignItems: 'center', padding: '2rem 0', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2rem' }}>
-          <div className="status-dot"></div>
+          {/* Status dot: Green if connected via Zernio or Local, Yellow/Red if pending */}
+          <div 
+            className="status-dot" 
+            style={{ 
+              backgroundColor: isConnected ? '#10b981' : '#f59e0b',
+              boxShadow: isConnected ? '0 0 10px #10b981' : '0 0 10px #f59e0b'
+            }}
+            title={isConnected ? "WhatsApp Conectado (Nube/Local)" : "WhatsApp Desconectado - Ver Canales"}
+          />
+
           <button 
             onClick={() => { setActiveTab('dashboard'); setActiveChat(null); }}
             style={{ background: 'none', border: 'none', color: activeTab === 'dashboard' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
@@ -153,13 +146,15 @@ function App() {
           >
             <Activity size={28} />
           </button>
+
           <button 
             onClick={() => setActiveTab('chats')}
             style={{ background: 'none', border: 'none', color: activeTab === 'chats' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
-            title="Chats"
+            title="Chats & Mensajería"
           >
             <MessageCircle size={28} />
           </button>
+
           <button 
             onClick={() => { setActiveTab('web-leads'); setActiveChat(null); }}
             title="Consultas Web Oficial"
@@ -183,12 +178,38 @@ function App() {
               </span>
             )}
           </button>
+
           <button 
             onClick={() => { setActiveTab('marketing'); setActiveChat(null); }}
             title="Publicidad & Campañas (Meta / Google Ads)"
             style={{ background: 'none', border: 'none', color: activeTab === 'marketing' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
           >
             <Megaphone size={28} />
+          </button>
+
+          <button 
+            onClick={() => { setActiveTab('channels'); setActiveChat(null); }}
+            title="Canales Oficiales (Zernio / WhatsApp Cloud / Meta)"
+            style={{ 
+              position: 'relative', 
+              background: 'none', 
+              border: 'none', 
+              color: activeTab === 'channels' ? 'var(--accent)' : 'var(--text-secondary)', 
+              cursor: 'pointer' 
+            }}
+          >
+            <Radio size={28} />
+            {zernioStatus !== 'connected' && (
+              <span style={{
+                position: 'absolute',
+                top: '-2px',
+                right: '-2px',
+                background: '#f59e0b',
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%'
+              }} />
+            )}
           </button>
         </div>
         
@@ -203,7 +224,7 @@ function App() {
         </button>
       </div>
 
-      {/* Second Sidebar: Chat List */}
+      {/* Second Sidebar: Chat List (when on chats tab) */}
       {activeTab === 'chats' && (
         <ChatList 
             chats={chats} 
@@ -220,12 +241,34 @@ function App() {
            <Marketing />
         ) : activeTab === 'web-leads' ? (
            <WebLeads />
+        ) : activeTab === 'channels' ? (
+           <Channels />
         ) : activeChat ? (
            <ChatView chat={activeChat} />
         ) : (
-           <div className="empty-state fade-in">
-              <MessageCircle size={64} />
-              <p>Selecciona un chat para ver la conversación y escuchar audios.</p>
+           <div className="empty-state fade-in" style={{ textAlign: 'center', padding: '3rem' }}>
+              <MessageCircle size={64} style={{ color: 'var(--accent)', marginBottom: '1rem', opacity: 0.8 }} />
+              <h2 style={{ fontSize: '1.4rem', marginBottom: '0.5rem' }}>Bandeja de Entrada COB</h2>
+              <p style={{ color: 'var(--text-secondary)', maxWidth: '420px', margin: '0 auto 1.5rem' }}>
+                Selecciona una conversación a la izquierda para ver los mensajes, responder en vivo y escuchar audios.
+              </p>
+              {zernioStatus !== 'connected' && (
+                <button
+                  onClick={() => setActiveTab('channels')}
+                  style={{
+                    padding: '0.6rem 1.2rem',
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    color: 'var(--accent)',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: '600'
+                  }}
+                >
+                  ⚡ Configurar WhatsApp Oficial en la Nube (Zernio)
+                </button>
+              )}
            </div>
         )}
       </div>

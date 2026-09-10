@@ -5,6 +5,14 @@ const { app, db, storage } = require('./firebase');
 const { doc, setDoc, onSnapshot, collection, query, orderBy, deleteDoc, updateDoc, getDocs, where } = require('firebase/firestore');
 const { ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 const qrcode = require('qrcode-terminal');
+const zernioService = require('./zernioService');
+
+process.on('unhandledRejection', (reason) => {
+    console.error('[Process Handled Rejection]', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[Process Handled Exception]', err?.message || err);
+});
 
 let client;
 
@@ -126,14 +134,31 @@ async function start() {
             const contact = await msg.getContact();
             const notifyName = (msg._data && msg._data.notifyName) || null;
             contactName = contact.name || contact.pushname || notifyName || msg.from;
+            // Auto-attribution for Marketing & Ads campaigns
+            let detectedTag = null;
+            if (msg.body) {
+                const lowerBody = msg.body.toLowerCase();
+                if (lowerBody.includes('instagram') || lowerBody.includes('meta') || lowerBody.includes('facebook')) {
+                    detectedTag = 'Meta Ads';
+                } else if (lowerBody.includes('google')) {
+                    detectedTag = 'Google Ads';
+                } else if (lowerBody.includes('anuncio') || lowerBody.includes('publicidad')) {
+                    detectedTag = 'Campaña Publicitaria';
+                }
+            }
+
             const contactId = getSerializedId(contact.id);
             if (contactId) {
-                setDoc(doc(db, "contacts", contactId), {
+                const contactPayload = {
                     name: contact.name || null,
                     pushname: contact.pushname || notifyName || null,
                     number: contact.number || null,
                     lastActivity: msg.timestamp
-                }, { merge: true });
+                };
+                if (detectedTag) {
+                    contactPayload.tag = detectedTag;
+                }
+                setDoc(doc(db, "contacts", contactId), contactPayload, { merge: true });
             }
             if (msg.author) {
                 const senderContact = await client.getContactById(msg.author);
@@ -208,7 +233,18 @@ async function start() {
         }
     });
 
-    client.initialize();
+    // Iniciar servicio Zernio en la nube
+    try {
+        await zernioService.init();
+    } catch (e) {
+        console.error('[Zernio] Error inicializando:', e.message);
+    }
+
+    try {
+        client.initialize();
+    } catch (e) {
+        console.error('[WhatsApp Web] Error al inicializar cliente local:', e.message);
+    }
 
     const outboxRef = collection(db, 'outbox');
     onSnapshot(outboxRef, (snapshot) => {
@@ -216,11 +252,19 @@ async function start() {
             if (change.type === 'added') {
                 const data = change.doc.data();
                 try {
-                    console.log(`Sending message to ${data.chatId}...`);
-                    await client.sendMessage(data.chatId, data.text);
+                    console.log(`[Outbox] Despachando mensaje hacia ${data.chatId}...`);
+                    if (zernioService.apiKey && zernioService.accountId) {
+                        console.log('[Outbox] Enviando a través de Zernio Meta Cloud API...');
+                        await zernioService.dispatchOutboxMessage(data);
+                    } else if (client) {
+                        console.log('[Outbox] Enviando a través de WhatsApp Web Local...');
+                        await client.sendMessage(data.chatId, data.text);
+                    } else {
+                        console.warn('[Outbox] Sin servicio disponible para despacho.');
+                    }
                     await deleteDoc(change.doc.ref);
                 } catch (e) {
-                    console.error('Error sending message:', e);
+                    console.error('[Outbox] Error enviando mensaje:', e.message);
                 }
             }
         });

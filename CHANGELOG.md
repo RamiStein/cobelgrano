@@ -4,6 +4,20 @@ Todos los cambios notables realizados en el sistema COB WhatsApp Dashboard queda
 
 ---
 
+## [Versión 2.2.0] - 2026-09-10 (Integración Zernio API & Meta Cloud WhatsApp)
+
+### 🚀 Nuevas Funcionalidades
+- **Zernio API Client (`backend/zernioService.js`):** Integración oficial con `https://zernio.com/api/v1` para conectar WhatsApp vía Meta Cloud API.
+- **Módulo de Canales & Integraciones (`frontend/src/components/Channels.jsx`):**
+  - Panel administrativo para gestionar la API Key de Zernio.
+  - Creación automatizada de perfil oficial de COB en Zernio.
+  - Flujo de vinculación oficial con **Meta Embedded Signup** en modo coexistencia (`onboarding=business_app`), permitiendo usar el celular y la web simultáneamente.
+  - Detección automática del callback de Meta en la URL para registrar el número vinculado en Firestore.
+- **Despacho Dual de Mensajería (`backend/index.js`):** Enrutamiento inteligente de mensajes salientes (`outbox`) a través de Zernio Cloud API con fallback a WhatsApp Web local.
+- **Tolerancia a Fallos:** Captura de excepciones globales de Puppeteer y SQLite journal para evitar interrupciones de servicio.
+
+---
+
 ## [Versión 2.0.0] - 2026-09-10 (Migración a Firebase + Vercel + GitHub)
 
 ### 🚀 Nuevas Funcionalidades

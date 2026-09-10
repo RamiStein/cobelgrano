@@ -128,3 +128,7 @@ Cada vez que se realicen mejoras en el sistema:
 - [x] Métricas de "Tiempo en la App" enlazadas con colección `sessions`.
 - [x] Módulo WebLeads integrado con alertas de badges rojos.
 - [x] Script de inicio automático de Windows (`motor-whatsapp.vbs`) activo.
+- [x] Integración de **Zernio API** (`https://zernio.com/api/v1`) para mensajería oficial en la nube mediante Meta Cloud API.
+- [x] Módulo **Canales & Integraciones** (`Channels.jsx`) en el CRM con gestión de API Key, creación de perfil y vinculación oficial de WhatsApp vía Meta Embedded Signup en modo coexistencia (`onboarding=business_app`).
+- [x] Despachador dual en backend (`zernioService.js`) conectado a la colección `outbox` de Firestore.
+
