@@ -1,19 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'react-qr-code';
-import { MessageCircle, Activity, Settings, User, LogOut } from 'lucide-react';
+import { MessageCircle, Activity, Settings, User, LogOut, Globe } from 'lucide-react';
+import './App.css';
 import Dashboard from './components/Dashboard';
 import ChatList from './components/ChatList';
 import ChatView from './components/ChatView';
+import WebLeads from './components/WebLeads';
 import { db } from './firebase';
-import { doc, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, orderBy, limit, where } from 'firebase/firestore';
 
 function App() {
   const [isReady, setIsReady] = useState(false);
   const [qrCode, setQrCode] = useState(null);
   
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' or 'chats'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'chats', 'web-leads'
   const [activeChat, setActiveChat] = useState(null);
   const [chats, setChats] = useState([]);
+  const [newLeadsCount, setNewLeadsCount] = useState(0);
   
   const sessionStartRef = useRef(null);
 
@@ -45,9 +48,22 @@ function App() {
       setChats(chatsData);
     });
 
+    // Listen to web_leads for badge
+    const qLeads = collection(db, 'web_leads');
+    const unsubLeads = onSnapshot(qLeads, (snapshot) => {
+      let count = 0;
+      snapshot.forEach(doc => {
+        if ((doc.data().status || 'nuevo') === 'nuevo') {
+          count++;
+        }
+      });
+      setNewLeadsCount(count);
+    });
+
     return () => {
       unsubStatus();
       unsubChats();
+      unsubLeads();
     };
   }, []);
   
@@ -116,6 +132,32 @@ function App() {
           >
             <MessageCircle size={24} />
           </button>
+          <button 
+            className={`nav-item ${activeTab === 'web-leads' ? 'active' : ''}`}
+            onClick={() => setActiveTab('web-leads')}
+            title="Consultas Web Oficial"
+            style={{ position: 'relative' }}
+          >
+            <Globe size={24} />
+            {newLeadsCount > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: '4px',
+                right: '4px',
+                background: '#ef4444',
+                color: 'white',
+                borderRadius: '999px',
+                fontSize: '0.65rem',
+                fontWeight: 'bold',
+                padding: '0.1rem 0.35rem',
+                minWidth: '16px',
+                textAlign: 'center',
+                boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)'
+              }}>
+                {newLeadsCount}
+              </span>
+            )}
+          </button>
         </div>
         
         <div className="nav-footer">
@@ -127,6 +169,8 @@ function App() {
 
       {/* Main Content Area */}
       {activeTab === 'dashboard' && <Dashboard />}
+
+      {activeTab === 'web-leads' && <WebLeads />}
       
       {activeTab === 'chats' && (
         <div className="workspace">

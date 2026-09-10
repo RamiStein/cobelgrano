@@ -6,12 +6,14 @@ import { collection, query, where, orderBy, onSnapshot, addDoc, updateDoc, doc, 
 function ChatView({ chat, onTagUpdated }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [inputText, setInputText] = useState('');
   const [transcribing, setTranscribing] = useState({});
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     const q = query(
       collection(db, 'messages'),
       where('author', '==', chat.author),
@@ -24,6 +26,10 @@ function ChatView({ chat, onTagUpdated }) {
         msgs.push({ id: doc.id, ...doc.data() });
       });
       setMessages(msgs);
+      setLoading(false);
+    }, (err) => {
+      console.error("Firebase query error:", err);
+      setError(err.message);
       setLoading(false);
     });
 
@@ -110,6 +116,11 @@ function ChatView({ chat, onTagUpdated }) {
       </div>
       
       <div className="messages-container" style={{ paddingBottom: '0' }}>
+        {error && (
+          <div style={{ padding: '1rem', background: '#fee2e2', color: '#991b1b', margin: '1rem', borderRadius: '8px' }}>
+            <strong>Error de Base de Datos:</strong> {error}
+          </div>
+        )}
         {loading ? (
           <div style={{ textAlign: 'center', marginTop: '2rem' }}>Cargando mensajes...</div>
         ) : (
