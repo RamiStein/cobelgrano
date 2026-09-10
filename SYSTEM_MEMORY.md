@@ -115,11 +115,15 @@ Cada vez que se realicen mejoras en el sistema:
 ---
 
 ## 📌 4. Estado Actual del Sistema (Septiembre 2026)
-- [x] Motor WhatsApp corriendo y autenticado.
+- [x] Motor WhatsApp corriendo y autenticado con soporte completo de notas de voz.
 - [x] Sincronización bidireccional en tiempo real con Firebase.
 - [x] Soporte para identidades `@lid` y `@c.us`.
 - [x] Interfaz de usuario original restaurada y responsiva.
-- [x] Envío de mensajes con barra oscura redondeada.
+- [x] Portal de Autenticación (`Login.jsx`) con Firebase Auth y Acceso Rápido del Equipo.
+- [x] Módulo Marketing & Publicidad (`Marketing.jsx`) con Generador de Enlaces Inteligentes de WhatsApp (Click-to-WhatsApp).
+- [x] Atribución automática de campañas de Meta Ads (Instagram/Facebook) y Google Ads en mensajes entrantes.
+- [x] Captura de parámetros publicitarios (`utm_source`, `utm_campaign`, `gclid`, `fbclid`) en el formulario de la web oficial (`cobelgrano.com`).
+- [x] Acceso directo al CRM desde el pie de página de la web oficial.
 - [x] Guardado y conteo de etiquetas (Tags).
 - [x] Métricas de "Tiempo en la App" enlazadas con colección `sessions`.
 - [x] Módulo WebLeads integrado con alertas de badges rojos.
