@@ -204,12 +204,13 @@ class ZernioService {
     async listConversations() {
         if (!this.accountId) return [];
         const result = await this.apiRequest(`/inbox/conversations?accountId=${this.accountId}`);
-        return result?.conversations || result?.data || [];
+        return result?.data || result?.conversations || [];
     }
 
     // Obtener mensajes de una conversación
     async getConversationMessages(conversationId) {
-        const result = await this.apiRequest(`/inbox/conversations/${conversationId}/messages`);
+        if (!this.accountId) return [];
+        const result = await this.apiRequest(`/inbox/conversations/${conversationId}/messages?accountId=${this.accountId}`);
         return result?.messages || result?.data || [];
     }
 
@@ -293,22 +294,50 @@ class ZernioService {
     async syncInboxToFirestore() {
         if (!this.apiKey || !this.accountId) return;
 
-        const conversations = await this.listConversations();
-        for (const conv of conversations) {
-            const convId = conv._id || conv.id;
-            const participant = conv.participantId || conv.phone || conv.username;
-            if (!participant) continue;
+        try {
+            const conversations = await this.listConversations();
+            for (const conv of conversations) {
+                const convId = conv._id || conv.id;
+                const participant = conv.participantId || conv.phone || conv.username;
+                if (!participant) continue;
 
-            const safeContactId = `${participant.replace(/[^0-9]/g, '')}@c.us`;
+                const safeContactId = `${participant.replace(/[^0-9]/g, '')}@c.us`;
 
-            // Actualizar contacto
-            await setDoc(doc(db, 'contacts', safeContactId), {
-                number: participant,
-                name: conv.participantName || conv.name || participant,
-                lastActivity: Math.floor(new Date(conv.updatedAt || conv.lastMessageAt || Date.now()).getTime() / 1000),
-                zernioConversationId: convId,
-                channel: 'whatsapp'
-            }, { merge: true });
+                // Actualizar contacto
+                await setDoc(doc(db, 'contacts', safeContactId), {
+                    number: participant,
+                    name: conv.participantName || conv.name || participant,
+                    pushname: conv.participantName || null,
+                    lastActivity: Math.floor(new Date(conv.updatedTime || conv.updatedAt || conv.lastMessageAt || Date.now()).getTime() / 1000),
+                    zernioConversationId: convId,
+                    channel: 'whatsapp_cloud'
+                }, { merge: true });
+
+                // Sincronizar mensajes de esta conversación
+                const messages = await this.getConversationMessages(convId);
+                for (const m of messages) {
+                    const isOutgoing = m.direction === 'outgoing';
+                    const isAudio = m.attachments?.some(a => a.type === 'audio' || a.voiceNote) || false;
+                    const mediaUrl = m.attachments?.[0]?.url || null;
+
+                    await setDoc(doc(db, 'messages', m.id), {
+                        id: m.id,
+                        fromMe: isOutgoing,
+                        author: safeContactId,
+                        contactName: conv.participantName || participant,
+                        senderName: isOutgoing ? 'Tú' : (conv.participantName || participant),
+                        body: m.message || (isAudio ? 'Nota de voz' : ''),
+                        timestamp: Math.floor(new Date(m.createdAt || m.sentAt || Date.now()).getTime() / 1000),
+                        type: isAudio ? 'audio' : 'chat',
+                        hasMedia: !!mediaUrl,
+                        isAudio: isAudio,
+                        mediaUrl: mediaUrl,
+                        channel: 'whatsapp_cloud'
+                    }, { merge: true });
+                }
+            }
+        } catch (err) {
+            console.error('[Zernio Sync] Error sincronizando:', err.message);
         }
     }
 }

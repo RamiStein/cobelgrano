@@ -239,10 +239,17 @@ async function start() {
         console.error('[Zernio] Error inicializando:', e.message);
     }
 
-    try {
-        client.initialize();
-    } catch (e) {
-        console.error('[WhatsApp Web] Error al inicializar cliente local:', e.message);
+    // Si Zernio está conectado a Meta Cloud API, no necesitamos el cliente local frágil
+    if (zernioService.accountId) {
+        console.log('[WhatsApp] Conectado exitosamente a través de Zernio Meta Cloud API. Sistema 100% operativo en la nube.');
+        await setDoc(doc(db, "system", "status"), { qr: null, isReady: true }, { merge: true });
+    } else {
+        try {
+            console.log('[WhatsApp Web] Inicializando cliente local como respaldo...');
+            client.initialize();
+        } catch (e) {
+            console.error('[WhatsApp Web] Error al inicializar cliente local:', e.message);
+        }
     }
 
     const outboxRef = collection(db, 'outbox');
