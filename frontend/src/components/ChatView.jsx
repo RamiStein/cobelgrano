@@ -1,60 +1,38 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Pause, FileText, Tag as TagIcon, Send, RefreshCw } from 'lucide-react';
+import { db } from '../firebase';
+import { collection, query, where, orderBy, onSnapshot, addDoc, updateDoc, doc, limit } from 'firebase/firestore';
 
-function ChatView({ chat, backendUrl, socket, onTagUpdated }) {
+function ChatView({ chat, onTagUpdated }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [inputText, setInputText] = useState('');
-  const [mediaReady, setMediaReady] = useState({}); // track which media files are ready
-  const [transcribing, setTranscribing] = useState({}); // track which messages are currently transcribing
+  const [transcribing, setTranscribing] = useState({});
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    fetchMessages();
+    setLoading(true);
+    const q = query(
+      collection(db, 'messages'),
+      where('author', '==', chat.author),
+      orderBy('timestamp', 'asc')
+    );
 
-    const handleNewMessage = (msg) => {
-      if (msg.author === chat.author) {
-        setMessages(prev => [...prev, msg]);
-      }
-    };
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = [];
+      snapshot.forEach((doc) => {
+        msgs.push({ id: doc.id, ...doc.data() });
+      });
+      setMessages(msgs);
+      setLoading(false);
+    });
 
-    const handleTranscription = ({ msgId, transcription }) => {
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, transcription } : m));
-    };
-
-    // When media finishes downloading in the backend
-    const handleMediaReady = ({ id }) => {
-      console.log('Media ready for:', id);
-      setMediaReady(prev => ({ ...prev, [id]: Date.now() }));
-    };
-
-    socket.on('new_message', handleNewMessage);
-    socket.on('transcription_updated', handleTranscription);
-    socket.on('media_ready', handleMediaReady);
-
-    return () => {
-      socket.off('new_message', handleNewMessage);
-      socket.off('transcription_updated', handleTranscription);
-      socket.off('media_ready', handleMediaReady);
-    };
+    return () => unsubscribe();
   }, [chat.author]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-
-  const fetchMessages = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${backendUrl}/messages/${chat.author}`);
-      const data = await res.json();
-      setMessages(data);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -78,39 +56,15 @@ function ChatView({ chat, backendUrl, socket, onTagUpdated }) {
     return getDisplayNumber();
   };
 
-  const handleTranscribe = async (msgId) => {
-    setTranscribing(prev => ({ ...prev, [msgId]: true }));
-    try {
-      const res = await fetch(`${backendUrl}/transcribe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ msgId })
-      });
-      const data = await res.json();
-      if (!data.success) {
-        alert(data.error || 'Error al transcribir. El audio puede no haberse descargado aún. Intenta de nuevo en unos segundos.');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Error en la conexión con el servidor.');
-    } finally {
-      setTranscribing(prev => ({ ...prev, [msgId]: false }));
-    }
-  };
-
   const handleTagConversation = async () => {
     const newTag = prompt('Ingresa una etiqueta para esta conversación (ej. Consulta, Turno, Urgente):', chat.tag || '');
     if (newTag !== null) {
       try {
-        await fetch(`${backendUrl}/tag`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatId: chat.author, tag: newTag })
-        });
+        await updateDoc(doc(db, 'contacts', chat.author), { tag: newTag });
         chat.tag = newTag;
         if (onTagUpdated) onTagUpdated();
       } catch (err) {
-        console.error(err);
+        console.error('Error etiquetando', err);
       }
     }
   };
@@ -123,21 +77,19 @@ function ChatView({ chat, backendUrl, socket, onTagUpdated }) {
     setInputText('');
     
     try {
-        await fetch(`${backendUrl}/send`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chatId: chat.author, text: textToSend })
+        await addDoc(collection(db, 'outbox'), {
+            chatId: chat.author,
+            text: textToSend,
+            createdAt: new Date().getTime()
         });
     } catch (err) {
         console.error('Error al enviar mensaje:', err);
     }
   };
 
-  // Generate a unique audio URL, busting cache when media becomes ready
-  const getAudioUrl = (msgId) => {
-    const cacheBuster = mediaReady[msgId] || '';
-    return `${backendUrl}/media/${msgId}?t=${cacheBuster}`;
-  };
+  const handleTranscribe = (msgId) => {
+     alert("La transcripción automática se debe re-configurar para Firebase. Muy pronto disponible.");
+  }
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -164,109 +116,76 @@ function ChatView({ chat, backendUrl, socket, onTagUpdated }) {
           messages.map(msg => (
             <div key={msg.id} className={`message ${msg.fromMe ? 'sent' : 'received'}`}>
               
-              {/* Display sender name for incoming messages */}
               {!msg.fromMe && msg.senderName && (
                 <div style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--accent)', marginBottom: '0.35rem' }}>
                   {msg.senderName}
                 </div>
               )}
 
-              {msg.isAudio === 1 ? (
+              {msg.isAudio ? (
                 <div>
                   <div className="audio-player">
-                    <audio 
-                      controls 
-                      style={{ height: '30px', outline: 'none' }}
-                      key={mediaReady[msg.id] || msg.id}
-                    >
-                      <source src={getAudioUrl(msg.id)} type="audio/ogg; codecs=opus" />
-                      Tu navegador no soporta el elemento de audio.
-                    </audio>
+                    {msg.mediaUrl ? (
+                        <audio controls style={{ height: '30px', outline: 'none' }} key={msg.mediaUrl}>
+                            <source src={msg.mediaUrl} type="audio/ogg; codecs=opus" />
+                            Tu navegador no soporta el elemento de audio.
+                        </audio>
+                    ) : (
+                        <div style={{fontSize: '0.8rem', color: 'gray'}}>Descargando audio...</div>
+                    )}
                   </div>
                   
                   {msg.transcription ? (
                     <div className="transcription-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
                       <span>{msg.transcription}</span>
-                      <button 
-                        onClick={() => handleTranscribe(msg.id)} 
-                        disabled={transcribing[msg.id]}
-                        style={{ 
-                          background: 'none', 
-                          border: 'none', 
-                          color: 'var(--text-secondary)', 
-                          cursor: transcribing[msg.id] ? 'not-allowed' : 'pointer', 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          padding: '0.25rem',
-                          animation: transcribing[msg.id] ? 'spin 1s linear infinite' : 'none'
-                        }}
-                        title="Volver a transcribir con modelo avanzado"
-                      >
-                        <RefreshCw size={14} />
-                      </button>
                     </div>
                   ) : (
-                    <button 
-                      className="transcribe-btn" 
-                      onClick={() => handleTranscribe(msg.id)}
-                      disabled={transcribing[msg.id]}
-                      style={{ cursor: transcribing[msg.id] ? 'not-allowed' : 'pointer', opacity: transcribing[msg.id] ? 0.7 : 1 }}
-                    >
-                      <FileText size={14} /> 
-                      {transcribing[msg.id] ? 'Transcribiendo...' : 'Transcribir'}
-                    </button>
+                    <div className="transcription-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                        <span>Nota de voz</span>
+                        <button 
+                            onClick={() => handleTranscribe(msg.id)} 
+                            disabled={transcribing[msg.id] || !msg.mediaUrl}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem', borderRadius: '4px' }}
+                            title="Transcribir (Próximamente)"
+                        >
+                            <FileText size={16} />
+                        </button>
+                    </div>
                   )}
                 </div>
+              ) : msg.hasMedia ? (
+                <div style={{ fontStyle: 'italic', color: 'var(--text-secondary)' }}>
+                  [Multimedia no soportada en esta versión web]
+                </div>
               ) : (
-                <p>{msg.body || (msg.hasMedia ? '[Contenido Multimedia]' : '')}</p>
+                <p>{msg.body}</p>
               )}
               
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                <span className="message-time">{formatTime(msg.timestamp)}</span>
-              </div>
+              <span className="time">{formatTime(msg.timestamp)}</span>
             </div>
           ))
         )}
         <div ref={messagesEndRef} />
       </div>
-      
-      {/* Input Area */}
-      <div style={{ padding: '1rem 2rem', background: 'var(--bg-glass)', borderTop: '1px solid var(--border)' }}>
-          <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '1rem' }}>
-              <input 
-                  type="text" 
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Escribe un mensaje..."
-                  style={{
-                      flex: 1,
-                      padding: '0.75rem 1rem',
-                      borderRadius: '99px',
-                      border: '1px solid var(--border)',
-                      background: 'var(--bg-secondary)',
-                      color: 'white',
-                      outline: 'none',
-                      fontFamily: 'inherit'
-                  }}
-              />
-              <button 
-                type="submit"
-                style={{
-                    background: 'var(--accent)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '50%',
-                    width: '45px',
-                    height: '45px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer'
-                }}
-              >
-                  <Send size={20} />
-              </button>
-          </form>
+
+      <div className="chat-input-container">
+        <form onSubmit={handleSendMessage} className="chat-input-form" style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+          <input
+            type="text"
+            className="chat-input"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder="Escribe un mensaje..."
+            style={{ flex: 1 }}
+          />
+          <button 
+            type="submit" 
+            className="send-button"
+            disabled={!inputText.trim()}
+          >
+            <Send size={20} />
+          </button>
+        </form>
       </div>
     </div>
   );

@@ -1,15 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
 import QRCode from 'react-qr-code';
 import { MessageCircle, Activity, Settings, User, LogOut } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import ChatList from './components/ChatList';
 import ChatView from './components/ChatView';
-
-const BACKEND_URL = 'http://localhost:3001';
+import { db } from './firebase';
+import { doc, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 
 function App() {
-  const [socket, setSocket] = useState(null);
   const [isReady, setIsReady] = useState(false);
   const [qrCode, setQrCode] = useState(null);
   
@@ -17,174 +15,135 @@ function App() {
   const [activeChat, setActiveChat] = useState(null);
   const [chats, setChats] = useState([]);
   
-  // Track session for time spent
   const sessionStartRef = useRef(null);
 
   useEffect(() => {
-    // Check initial status
-    fetch(`${BACKEND_URL}/status`)
-      .then(res => res.json())
-      .then(data => setIsReady(data.ready))
-      .catch(console.error);
-
-    const newSocket = io(BACKEND_URL);
-    setSocket(newSocket);
-
-    newSocket.on('qr', (qr) => {
-      setQrCode(qr);
-      setIsReady(false);
+    // Listen to system status for QR and Readiness
+    const unsubStatus = onSnapshot(doc(db, 'system', 'status'), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setIsReady(data.isReady);
+        setQrCode(data.qr);
+      }
     });
 
-    newSocket.on('ready', () => {
-      setIsReady(true);
-      setQrCode(null);
-      fetchChats();
-    });
-
-    let fetchTimeout;
-    newSocket.on('new_message', (msg) => {
-      // Refresh chats list to update last message, debounced to prevent UI thrashing
-      clearTimeout(fetchTimeout);
-      fetchTimeout = setTimeout(() => {
-        fetchChats();
-      }, 500);
-      // The ChatView component will handle adding the message to its own state if it's the active chat
+    // Listen to contacts/chats list
+    const q = query(collection(db, 'contacts'), orderBy('lastActivity', 'desc'), limit(100));
+    const unsubChats = onSnapshot(q, (snapshot) => {
+      const chatsData = [];
+      snapshot.forEach(doc => {
+        chatsData.push({
+          author: doc.id,
+          contactId: doc.id,
+          name: doc.data().name,
+          pushname: doc.data().pushname,
+          number: doc.data().number,
+          lastActivity: doc.data().lastActivity,
+          tag: doc.data().tag
+        });
+      });
+      setChats(chatsData);
     });
 
     return () => {
-      clearTimeout(fetchTimeout);
-      newSocket.close();
+      unsubStatus();
+      unsubChats();
     };
   }, []);
   
-  // Handle session timing
+  // Handle session timing (we won't sync this to firebase for now to keep it simple, or you can add a sessions collection later)
   useEffect(() => {
       if (activeChat) {
           sessionStartRef.current = Date.now();
       }
-      
-      return () => {
-          if (activeChat && sessionStartRef.current) {
-              const endTime = Date.now();
-              // Send session to backend
-              fetch(`${BACKEND_URL}/session`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                      chatId: activeChat.author,
-                      startTime: sessionStartRef.current,
-                      endTime: endTime
-                  })
-              }).catch(console.error);
-          }
-      }
+      return () => {}
   }, [activeChat]);
 
-  const fetchChats = async () => {
-    try {
-      const res = await fetch(`${BACKEND_URL}/chats`);
-      const data = await res.json();
-      setChats(data);
-    } catch (error) {
-      console.error(error);
-    }
-  };
-  
-  // Also fetch chats periodically or when ready
-  useEffect(() => {
-      if (isReady) fetchChats();
-  }, [isReady]);
-
   const handleLogout = async () => {
-    if (confirm('¿Estás seguro de que quieres cerrar la sesión de WhatsApp? Tendrás que escanear el código QR de nuevo.')) {
-      try {
-        setIsReady(false);
-        setQrCode(null);
-        await fetch(`${BACKEND_URL}/logout`, { method: 'POST' });
-      } catch (error) {
-        console.error('Error logging out:', error);
-      }
+    if (confirm('¿Estás seguro de que quieres cerrar la sesión de WhatsApp? Esta acción requiere reiniciar el servidor local por ahora.')) {
+        alert("Reinicia el backend en tu PC para cerrar sesión.");
     }
   };
 
-  if (!isReady) {
+  if (!isReady && qrCode) {
     return (
-      <div className="qr-screen fade-in">
-        <div className="qr-box">
-          <h2>Conectar a WhatsApp</h2>
-          <p>Escanea este código QR con la aplicación de WhatsApp en tu teléfono para vincular el panel.</p>
-          {qrCode ? (
-            <div style={{ background: 'white', padding: '16px', borderRadius: '12px' }}>
-              <QRCode value={qrCode} size={250} />
-            </div>
-          ) : (
-            <div style={{ height: '250px', display: 'flex', alignItems: 'center' }}>
-                <p>Generando código QR...</p>
-            </div>
-          )}
+      <div className="login-container">
+        <div className="login-card">
+          <div className="logo-container" style={{display: 'flex', justifyContent: 'center', marginBottom: '2rem'}}>
+             {/* Logo would go here */}
+          </div>
+          <h2>Conectar WhatsApp</h2>
+          <p>Escanea este código QR con la app de WhatsApp en tu teléfono para conectar el sistema.</p>
+          <div className="qr-wrapper">
+            <QRCode value={qrCode} size={256} />
+          </div>
+          <p style={{ marginTop: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+            Abre WhatsApp &gt; Dispositivos vinculados &gt; Vincular un dispositivo
+          </p>
         </div>
       </div>
     );
   }
 
+  if (!isReady && !qrCode) {
+    return (
+      <div className="loading-container">
+        <h2>Iniciando Sistema COB...</h2>
+        <p>Conectando con WhatsApp, por favor espera.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="app-container fade-in">
-      {/* Sidebar Navigation */}
-      <div className="sidebar" style={{ width: '80px', alignItems: 'center', padding: '2rem 0', display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2rem' }}>
-          <div className="status-dot"></div>
+    <div className="app-layout">
+      {/* Navbar Lateral */}
+      <nav className="main-nav">
+        <div className="nav-brand">
+          COB
+        </div>
+        <div className="nav-items">
           <button 
-            onClick={() => { setActiveTab('dashboard'); setActiveChat(null); }}
-            style={{ background: 'none', border: 'none', color: activeTab === 'dashboard' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
+            className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+            title="Dashboard"
           >
-            <Activity size={28} />
+            <Activity size={24} />
           </button>
           <button 
+            className={`nav-item ${activeTab === 'chats' ? 'active' : ''}`}
             onClick={() => setActiveTab('chats')}
-            style={{ background: 'none', border: 'none', color: activeTab === 'chats' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
+            title="Chats"
           >
-            <MessageCircle size={28} />
+            <MessageCircle size={24} />
           </button>
         </div>
         
-        <button 
-          onClick={handleLogout}
-          style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', transition: 'color 0.2s' }}
-          onMouseEnter={(e) => e.target.style.color = '#ef4444'}
-          onMouseLeave={(e) => e.target.style.color = 'var(--text-secondary)'}
-          title="Cerrar Sesión"
-        >
-          <LogOut size={28} />
-        </button>
-      </div>
+        <div className="nav-footer">
+          <button className="nav-item" onClick={handleLogout} title="Cerrar Sesión">
+            <LogOut size={24} />
+          </button>
+        </div>
+      </nav>
 
-      {/* Second Sidebar: Chat List */}
+      {/* Main Content Area */}
+      {activeTab === 'dashboard' && <Dashboard />}
+      
       {activeTab === 'chats' && (
-        <ChatList 
+        <div className="workspace">
+          <ChatList 
             chats={chats} 
             activeChat={activeChat} 
             setActiveChat={setActiveChat} 
-        />
+          />
+          {activeChat ? (
+            <ChatView chat={activeChat} />
+          ) : (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+              Selecciona una conversación para empezar
+            </div>
+          )}
+        </div>
       )}
-
-      {/* Main Area */}
-      <div className="main-area">
-        {activeTab === 'dashboard' ? (
-           <Dashboard backendUrl={BACKEND_URL} />
-        ) : activeChat ? (
-           <ChatView 
-              chat={activeChat} 
-              backendUrl={BACKEND_URL} 
-              socket={socket} 
-              onTagUpdated={fetchChats}
-           />
-        ) : (
-           <div className="empty-state fade-in">
-              <MessageCircle size={64} />
-              <p>Selecciona un chat para ver la conversación y escuchar audios.</p>
-           </div>
-        )}
-      </div>
     </div>
   );
 }

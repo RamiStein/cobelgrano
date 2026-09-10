@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { MessageSquare, Clock, Tag, Activity } from 'lucide-react';
+import { db } from '../firebase';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 
-function Dashboard({ backendUrl }) {
+function Dashboard() {
   const [stats, setStats] = useState({
     totalMessages: 0,
     totalTime: 0,
@@ -10,16 +12,28 @@ function Dashboard({ backendUrl }) {
 
   useEffect(() => {
     fetchStats();
-    // Refresh stats every minute
-    const interval = setInterval(fetchStats, 60000);
-    return () => clearInterval(interval);
   }, []);
 
   const fetchStats = async () => {
     try {
-      const res = await fetch(`${backendUrl}/stats`);
-      const data = await res.json();
-      setStats(data);
+      const messagesSnapshot = await getDocs(collection(db, 'messages'));
+      const contactsSnapshot = await getDocs(collection(db, 'contacts'));
+      
+      const tagMap = {};
+      contactsSnapshot.forEach(doc => {
+          const data = doc.data();
+          if (data.tag) {
+              tagMap[data.tag] = (tagMap[data.tag] || 0) + 1;
+          }
+      });
+      
+      const tagsArray = Object.keys(tagMap).map(tag => ({ tag, count: tagMap[tag] }));
+      
+      setStats({
+          totalMessages: messagesSnapshot.size,
+          totalTime: 0, // Not implemented in firebase version yet
+          tags: tagsArray
+      });
     } catch (err) {
       console.error(err);
     }
@@ -71,7 +85,7 @@ function Dashboard({ backendUrl }) {
       </div>
 
       <div style={{ marginTop: '3rem' }} className="fade-in" style={{ animationDelay: '0.4s' }}>
-        <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: 500 }}>Razones de comunicación (Etiquetas)</h2>
+        <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', fontWeight: 500 }}>Razones de comunicación (Etiquetas en chats)</h2>
         
         {stats.tags && stats.tags.length > 0 ? (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
@@ -86,12 +100,12 @@ function Dashboard({ backendUrl }) {
                 gap: '0.25rem'
               }}>
                 <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{tag.tag}</span>
-                <span style={{ fontSize: '1.5rem', fontWeight: 600 }}>{tag.count} <span style={{fontSize: '0.875rem', fontWeight: 400, color: 'var(--text-secondary)'}}>msg(s)</span></span>
+                <span style={{ fontSize: '1.5rem', fontWeight: 600 }}>{tag.count} <span style={{fontSize: '0.875rem', fontWeight: 400, color: 'var(--text-secondary)'}}>chat(s)</span></span>
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ color: 'var(--text-secondary)' }}>Aún no has etiquetado ningún mensaje.</p>
+          <p style={{ color: 'var(--text-secondary)' }}>Aún no has etiquetado ningún chat.</p>
         )}
       </div>
     </div>
