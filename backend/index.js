@@ -86,8 +86,7 @@ async function start() {
     });
 
     client.on('qr', (qr) => {
-        console.log('SCAN THIS QR CODE TO LOGIN:');
-        qrcode.generate(qr, { small: true });
+        console.log('[WhatsApp Web] QR generado y sincronizado con Firestore.');
         setDoc(doc(db, "system", "status"), { qr, isReady: false });
     });
 
