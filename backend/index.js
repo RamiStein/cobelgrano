@@ -2,7 +2,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
 const { app, db, storage } = require('./firebase');
-const { doc, setDoc, onSnapshot, collection, query, orderBy, deleteDoc, updateDoc } = require('firebase/firestore');
+const { doc, setDoc, onSnapshot, collection, query, orderBy, deleteDoc, updateDoc, getDocs, where } = require('firebase/firestore');
 const { ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 const qrcode = require('qrcode-terminal');
 
@@ -13,18 +13,47 @@ function getSerializedId(idObj) {
     return idObj._serialized || idObj['$1'] || `${idObj.fromMe}_${idObj.remote}_${idObj.id}`;
 }
 
-async function uploadMedia(msg, safeId) {
-    try {
-        const media = await msg.downloadMedia();
-        if (media && media.data) {
-            const buffer = Buffer.from(media.data, 'base64');
-            const storageRef = ref(storage, `audios/${safeId}.ogg`);
-            await uploadBytes(storageRef, buffer, { contentType: 'audio/ogg' });
-            const url = await getDownloadURL(storageRef);
-            return url;
+async function uploadMediaWithRetry(msg, safeId, serializedId, maxRetries = 5) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const delayMs = attempt === 1 ? 2500 : 4000 * attempt;
+            console.log(`[Audio] Esperando ${delayMs}ms antes de descargar audio ${safeId} (intento ${attempt}/${maxRetries})...`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+
+            if (msg.id) {
+                msg.id._serialized = serializedId;
+            }
+
+            const media = await msg.downloadMedia();
+            if (media && media.data) {
+                console.log(`[Audio] Descargado ${safeId} exitosamente, guardando audio en Firestore...`);
+                const dataUrl = `data:${media.mimetype || 'audio/ogg; codecs=opus'};base64,${media.data}`;
+                
+                // Store data URL directly in Firestore so audio plays immediately without 404 bucket errors
+                await updateDoc(doc(db, "messages", serializedId), { 
+                    mediaUrl: dataUrl 
+                });
+                console.log(`[Audio] ¡Audio listo y sincronizado en Firestore para ${safeId}!`);
+
+                // Also try Storage upload in background if bucket exists
+                try {
+                    const buffer = Buffer.from(media.data, 'base64');
+                    const storageRef = ref(storage, `audios/${safeId}.ogg`);
+                    await uploadBytes(storageRef, buffer, { contentType: media.mimetype || 'audio/ogg; codecs=opus' });
+                    const url = await getDownloadURL(storageRef);
+                    await updateDoc(doc(db, "messages", serializedId), { mediaUrl: url });
+                    console.log(`[Audio] URL permanente de Storage actualizada: ${url}`);
+                } catch (e) {
+                    // Storage bucket not created yet in console, dataUrl in Firestore already works perfectly
+                }
+
+                return dataUrl;
+            } else {
+                console.log(`[Audio] Intento ${attempt}: media aún no disponible en WhatsApp Web.`);
+            }
+        } catch (e) {
+            console.error(`[Audio] Error en intento ${attempt} para ${safeId}:`, e.message);
         }
-    } catch (e) {
-        console.error('Error uploading media', e);
     }
     return null;
 }
@@ -36,16 +65,50 @@ async function start() {
         puppeteer: { args: ['--no-sandbox', '--disable-setuid-sandbox'] }
     });
 
+    client.on('loading_screen', (percent, message) => {
+        console.log(`[WhatsApp] Cargando: ${percent}% - ${message}`);
+    });
+
+    client.on('authenticated', () => {
+        console.log('[WhatsApp] Autenticado con éxito.');
+    });
+
+    client.on('auth_failure', (msg) => {
+        console.error('[WhatsApp] Fallo de autenticación:', msg);
+    });
+
     client.on('qr', (qr) => {
         console.log('SCAN THIS QR CODE TO LOGIN:');
         qrcode.generate(qr, { small: true });
-        // Also save to firebase so frontend can show it if needed
         setDoc(doc(db, "system", "status"), { qr, isReady: false });
     });
 
-    client.on('ready', () => {
+    client.on('ready', async () => {
         console.log('WhatsApp Client is Ready!');
         setDoc(doc(db, "system", "status"), { qr: null, isReady: true });
+
+        try {
+            const pendingQuery = query(collection(db, 'messages'), where('isAudio', '==', true));
+            const pendingSnap = await getDocs(pendingQuery);
+            for (const docSnap of pendingSnap.docs) {
+                const data = docSnap.data();
+                if (!data.mediaUrl) {
+                    const msgId = docSnap.id;
+                    const safeId = msgId.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    console.log(`[Audio Recovery] Intentando recuperar audio pendiente: ${msgId}`);
+                    try {
+                        const msgObj = await client.getMessageById(msgId);
+                        if (msgObj) {
+                            uploadMediaWithRetry(msgObj, safeId, msgId);
+                        }
+                    } catch (err) {
+                        console.error(`[Audio Recovery] No se pudo obtener mensaje ${msgId}:`, err.message);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[Audio Recovery] Error buscando audios pendientes:', err);
+        }
     });
 
     client.on('message', async (msg) => {
@@ -98,10 +161,7 @@ async function start() {
 
         if (isAudio && hasMedia) {
             const safeId = serializedId.replace(/[^a-zA-Z0-9_-]/g, '_');
-            const url = await uploadMedia(msg, safeId);
-            if (url) {
-                await updateDoc(doc(db, "messages", serializedId), { mediaUrl: url });
-            }
+            uploadMediaWithRetry(msg, safeId, serializedId);
         }
     });
 
@@ -109,6 +169,9 @@ async function start() {
         if (msg.isStatus || !msg.fromMe) return;
         const serializedId = getSerializedId(msg.id);
         if (!serializedId) return;
+
+        const isAudio = (msg.type === 'ptt' || msg.type === 'audio');
+        const hasMedia = msg.hasMedia;
 
         let contactName = msg.to;
         try {
@@ -133,16 +196,20 @@ async function start() {
             body: msg.body,
             timestamp: msg.timestamp,
             type: msg.type,
-            hasMedia: msg.hasMedia,
-            isAudio: (msg.type === 'ptt' || msg.type === 'audio'),
+            hasMedia,
+            isAudio,
             mediaUrl: null
         };
         await setDoc(doc(db, "messages", serializedId), msgData);
+
+        if (isAudio && hasMedia) {
+            const safeId = serializedId.replace(/[^a-zA-Z0-9_-]/g, '_');
+            uploadMediaWithRetry(msg, safeId, serializedId);
+        }
     });
 
     client.initialize();
 
-    // Listen to Firebase Outbox for sending messages
     const outboxRef = collection(db, 'outbox');
     onSnapshot(outboxRef, (snapshot) => {
         snapshot.docChanges().forEach(async (change) => {

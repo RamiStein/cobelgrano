@@ -83,6 +83,13 @@ El sistema fue diseñado con una arquitectura **desacoplada (Serverless Frontend
 - **Problema:** Renderizar el código QR en pantalla web a veces provoca que cámaras de teléfonos rechacen el escaneo si los márgenes blancos o el tamaño no son óptimos.
 - **Solución:** Existe un generador nativo en backend (`qrcode.toFile`) que puede exportar `QR.png` a 600px en el Escritorio con borde blanco nítido para un escaneo infalible si hiciera falta revincular.
 
+### 🟡 Lección 6: Sincronización Inmediata de Notas de Voz (Audios)
+- **Problema:** `downloadMedia()` requiere unos segundos de demora para que WhatsApp termine de desencriptar el archivo internamente antes de entregarlo. Además, si Firebase Cloud Storage no tiene el bucket habilitado (error 404), la subida tradicional falla y el frontend queda trabado en "Descargando audio...". También `message_create` (audios salientes) debe descargar y sincronizar la nota de voz.
+- **Regla Inviolable:**
+  - Toda nota de voz se procesa con reintentos progresivos (`uploadMediaWithRetry`).
+  - Al descargarse el base64 de WhatsApp, se construye un `data:audio/ogg;codecs=opus;base64,...` y se guarda directo en el campo `mediaUrl` del documento de Firestore.
+  - Esto garantiza reproducción inmediata en el navegador sin depender de buckets externos ni configuraciones de permisos en la consola de Firebase.
+
 ---
 
 ## 🛠️ 3. Rutina de Mantenimiento y Despliegue
