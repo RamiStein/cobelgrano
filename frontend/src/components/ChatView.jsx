@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Play, Pause, FileText, Tag as TagIcon, Send, RefreshCw } from 'lucide-react';
 import { db } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, addDoc, updateDoc, doc, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, setDoc, doc, limit } from 'firebase/firestore';
 
 function ChatView({ chat, onTagUpdated }) {
   const [messages, setMessages] = useState([]);
@@ -14,10 +14,29 @@ function ChatView({ chat, onTagUpdated }) {
   useEffect(() => {
     setLoading(true);
     setError(null);
+
+    // Build list of all potential IDs for this chat (Phone @c.us, LID @lid, numbers)
+    const rawNumber = chat.number ? chat.number.toString().trim() : null;
+    const authorNum = chat.author?.includes('@') ? chat.author.split('@')[0] : chat.author;
+    const contactNum = chat.contactId?.includes('@') ? chat.contactId.split('@')[0] : chat.contactId;
+
+    const candidates = [
+      chat.author,
+      chat.contactId,
+      rawNumber ? `${rawNumber}@lid` : null,
+      rawNumber ? `${rawNumber}@c.us` : null,
+      rawNumber,
+      authorNum ? `${authorNum}@lid` : null,
+      authorNum ? `${authorNum}@c.us` : null,
+      contactNum ? `${contactNum}@lid` : null,
+      contactNum ? `${contactNum}@c.us` : null
+    ].filter(Boolean);
+
+    const uniqueAuthors = [...new Set(candidates)];
+
     const q = query(
       collection(db, 'messages'),
-      where('author', '==', chat.author),
-      orderBy('timestamp', 'asc')
+      where('author', 'in', uniqueAuthors)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -25,6 +44,8 @@ function ChatView({ chat, onTagUpdated }) {
       snapshot.forEach((doc) => {
         msgs.push({ id: doc.id, ...doc.data() });
       });
+      // Sort in JavaScript by timestamp (handles chronological order without needing composite index)
+      msgs.sort((a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0));
       setMessages(msgs);
       setLoading(false);
     }, (err) => {
@@ -34,7 +55,7 @@ function ChatView({ chat, onTagUpdated }) {
     });
 
     return () => unsubscribe();
-  }, [chat.author]);
+  }, [chat.author, chat.contactId, chat.number]);
 
   useEffect(() => {
     scrollToBottom();
@@ -66,7 +87,10 @@ function ChatView({ chat, onTagUpdated }) {
     const newTag = prompt('Ingresa una etiqueta para esta conversación (ej. Consulta, Turno, Urgente):', chat.tag || '');
     if (newTag !== null) {
       try {
-        await updateDoc(doc(db, 'contacts', chat.author), { tag: newTag });
+        await setDoc(doc(db, 'contacts', chat.author), { tag: newTag }, { merge: true });
+        if (chat.contactId && chat.contactId !== chat.author) {
+          await setDoc(doc(db, 'contacts', chat.contactId), { tag: newTag }, { merge: true });
+        }
         chat.tag = newTag;
         if (onTagUpdated) onTagUpdated();
       } catch (err) {
@@ -82,9 +106,12 @@ function ChatView({ chat, onTagUpdated }) {
     const textToSend = inputText;
     setInputText('');
     
+    // Choose destination: phone @c.us if available, or chat.author
+    const targetChat = chat.contactId || chat.author;
+    
     try {
         await addDoc(collection(db, 'outbox'), {
-            chatId: chat.author,
+            chatId: targetChat,
             text: textToSend,
             createdAt: new Date().getTime()
         });
@@ -172,7 +199,7 @@ function ChatView({ chat, onTagUpdated }) {
                 <p>{msg.body}</p>
               )}
               
-              <span className="time">{formatTime(msg.timestamp)}</span>
+              <span className="message-time">{formatTime(msg.timestamp)}</span>
             </div>
           ))
         )}

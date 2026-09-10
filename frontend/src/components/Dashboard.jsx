@@ -18,7 +18,13 @@ function Dashboard() {
     try {
       const messagesSnapshot = await getDocs(collection(db, 'messages'));
       const contactsSnapshot = await getDocs(collection(db, 'contacts'));
+      const sessionsSnapshot = await getDocs(collection(db, 'sessions'));
       
+      let totalDuration = 0;
+      sessionsSnapshot.forEach(doc => {
+        totalDuration += (doc.data().duration || 0);
+      });
+
       const tagMap = {};
       contactsSnapshot.forEach(doc => {
           const data = doc.data();
@@ -31,7 +37,7 @@ function Dashboard() {
       
       setStats({
           totalMessages: messagesSnapshot.size,
-          totalTime: 0, // Not implemented in firebase version yet
+          totalTime: totalDuration,
           tags: tagsArray
       });
     } catch (err) {

@@ -359,9 +359,64 @@ body {
   color: var(--text-secondary);
 }
 
-/* Input area (hidden for this viewer-only app, but let's add basic styling if needed) */
-.message-input {
-  display: none; /* App is mainly for viewing/stats, but can be added later */
+/* Chat Input Bar */
+.chat-input-container {
+  padding: 1rem 1.5rem;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+}
+
+.chat-input-form {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 0.4rem 0.75rem 0.4rem 1.25rem;
+  transition: border-color 0.2s;
+}
+
+.chat-input-form:focus-within {
+  border-color: var(--accent);
+}
+
+.chat-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--font-main);
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.chat-input::placeholder {
+  color: var(--text-secondary);
+}
+
+.send-button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+
+.send-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* Scrollbar */

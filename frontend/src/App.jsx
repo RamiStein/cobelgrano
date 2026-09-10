@@ -7,7 +7,7 @@ import ChatList from './components/ChatList';
 import ChatView from './components/ChatView';
 import WebLeads from './components/WebLeads';
 import { db } from './firebase';
-import { doc, onSnapshot, collection, query, orderBy, limit, where } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, orderBy, limit, where, addDoc } from 'firebase/firestore';
 
 function App() {
   const [isReady, setIsReady] = useState(false);
@@ -67,12 +67,23 @@ function App() {
     };
   }, []);
   
-  // Handle session timing (we won't sync this to firebase for now to keep it simple, or you can add a sessions collection later)
+  // Handle session timing and sync to Firebase
   useEffect(() => {
-      if (activeChat) {
-          sessionStartRef.current = Date.now();
+    if (activeChat) {
+      sessionStartRef.current = Date.now();
+    }
+    return () => {
+      if (activeChat && sessionStartRef.current) {
+        const duration = Date.now() - sessionStartRef.current;
+        if (duration > 1500) { // Only log if reading for more than 1.5s
+          addDoc(collection(db, 'sessions'), {
+            chatId: activeChat.author,
+            duration: duration,
+            timestamp: Date.now()
+          }).catch(console.error);
+        }
       }
-      return () => {}
+    };
   }, [activeChat]);
 
   const handleLogout = async () => {
