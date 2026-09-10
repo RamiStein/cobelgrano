@@ -1,0 +1,27 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build output
+frontend/dist/
+backend/dist/
+
+# Env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# WhatsApp Web JS Data
+backend/.wwebjs_auth/
+backend/.wwebjs_cache/
+
+# Database and Media
+backend/database.sqlite
+backend/media/
+
+# OS files
+.DS_Store
+Thumbs.db
