@@ -1,19 +1,25 @@
 import { useState, useEffect, useRef } from 'react';
 import QRCode from 'react-qr-code';
-import { MessageCircle, Activity, Settings, User, LogOut, Globe } from 'lucide-react';
+import { MessageCircle, Activity, Settings, User, LogOut, Globe, Megaphone } from 'lucide-react';
 import './App.css';
 import Dashboard from './components/Dashboard';
 import ChatList from './components/ChatList';
 import ChatView from './components/ChatView';
 import WebLeads from './components/WebLeads';
-import { db } from './firebase';
+import Marketing from './components/Marketing';
+import Login from './components/Login';
+import { db, auth } from './firebase';
 import { doc, onSnapshot, collection, query, orderBy, limit, where, addDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return !!localStorage.getItem('cob_staff_auth');
+  });
   const [isReady, setIsReady] = useState(false);
   const [qrCode, setQrCode] = useState(null);
   
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'chats', 'web-leads'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'chats', 'web-leads', 'marketing'
   const [activeChat, setActiveChat] = useState(null);
   const [chats, setChats] = useState([]);
   const [newLeadsCount, setNewLeadsCount] = useState(0);
@@ -60,10 +66,17 @@ function App() {
       setNewLeadsCount(count);
     });
 
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setIsAuthenticated(true);
+      }
+    });
+
     return () => {
       unsubStatus();
       unsubChats();
       unsubLeads();
+      unsubAuth();
     };
   }, []);
   
@@ -87,10 +100,16 @@ function App() {
   }, [activeChat]);
 
   const handleLogout = async () => {
-    if (confirm('¿Estás seguro de que quieres cerrar la sesión de WhatsApp? Esta acción requiere reiniciar el servidor local por ahora.')) {
-        alert("Reinicia el backend en tu PC para cerrar sesión.");
+    if (confirm('¿Deseas cerrar la sesión del CRM de COB?')) {
+      localStorage.removeItem('cob_staff_auth');
+      await signOut(auth).catch(() => {});
+      setIsAuthenticated(false);
     }
   };
+
+  if (!isAuthenticated) {
+    return <Login onAuthenticated={() => setIsAuthenticated(true)} />;
+  }
 
   if (!isReady && qrCode) {
     return (
@@ -164,6 +183,13 @@ function App() {
               </span>
             )}
           </button>
+          <button 
+            onClick={() => { setActiveTab('marketing'); setActiveChat(null); }}
+            title="Publicidad & Campañas (Meta / Google Ads)"
+            style={{ background: 'none', border: 'none', color: activeTab === 'marketing' ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer' }}
+          >
+            <Megaphone size={28} />
+          </button>
         </div>
         
         <button 
@@ -171,7 +197,7 @@ function App() {
           style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', transition: 'color 0.2s' }}
           onMouseEnter={(e) => e.target.style.color = '#ef4444'}
           onMouseLeave={(e) => e.target.style.color = 'var(--text-secondary)'}
-          title="Cerrar Sesión"
+          title="Cerrar Sesión del CRM"
         >
           <LogOut size={28} />
         </button>
@@ -190,6 +216,8 @@ function App() {
       <div className="main-area">
         {activeTab === 'dashboard' ? (
            <Dashboard />
+        ) : activeTab === 'marketing' ? (
+           <Marketing />
         ) : activeTab === 'web-leads' ? (
            <WebLeads />
         ) : activeChat ? (

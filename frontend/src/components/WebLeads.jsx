@@ -215,6 +215,19 @@ function WebLeads() {
                       }}>
                         {badgeText}
                       </span>
+                      {lead.utmSource && (
+                        <span style={{
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '999px',
+                          fontSize: '0.75rem',
+                          fontWeight: 500,
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          color: lead.utmSource.includes('Instagram') || lead.utmSource.includes('Meta') || lead.utmSource.includes('Facebook') ? '#e1306c' : lead.utmSource.includes('Google') ? '#4285f4' : 'var(--text-secondary)',
+                          border: '1px solid rgba(255, 255, 255, 0.1)'
+                        }}>
+                          🎯 {lead.utmSource} {lead.utmCampaign ? `(${lead.utmCampaign})` : ''}
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
