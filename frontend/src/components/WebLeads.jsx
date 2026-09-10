@@ -80,11 +80,11 @@ function WebLeads() {
             <Globe color="#06b6d4" /> Consultas de la Web Oficial
           </h1>
           <p style={{ color: 'var(--text-secondary)' }}>
-            Pacientes que dejaron su consulta en la web oficial (cobelgrano.vercel.app).
+            Pacientes que dejaron su consulta en la web oficial (cobelgrano.com).
           </p>
         </div>
         <a 
-          href="https://cobelgrano.vercel.app" 
+          href="https://cobelgrano.com" 
           target="_blank" 
           rel="noopener noreferrer" 
           style={{
