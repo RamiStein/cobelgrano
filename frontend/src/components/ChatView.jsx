@@ -109,16 +109,20 @@ function ChatView({ chat, onTagUpdated }) {
     // Choose destination: phone @c.us if available, or chat.author
     const targetChat = chat.contactId || chat.author;
     
+    const isInstagram = chat.channel === 'instagram' || chat.author?.startsWith('ig_');
     try {
         await addDoc(collection(db, 'outbox'), {
             chatId: targetChat,
             text: textToSend,
+            channel: isInstagram ? 'instagram' : 'whatsapp',
             createdAt: new Date().getTime()
         });
     } catch (err) {
         console.error('Error al enviar mensaje:', err);
     }
   };
+
+  const isInstagram = chat.channel === 'instagram' || chat.author?.startsWith('ig_');
 
   const handleTranscribe = (msgId) => {
      alert("La transcripción automática se debe re-configurar para Firebase. Muy pronto disponible.");
@@ -127,9 +131,23 @@ function ChatView({ chat, onTagUpdated }) {
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="main-header">
-        <div className="chat-header-info">
-          <h2>{formatName()}</h2>
-          <span className="chat-subtitle" style={{opacity: 0.7, fontSize: '0.8rem'}}>{getDisplayNumber()}</span>
+        <div className="chat-header-info" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <h2>{formatName()}</h2>
+              <span style={{
+                fontSize: '0.7rem',
+                fontWeight: 'bold',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: isInstagram ? 'linear-gradient(45deg, #f09433 0%, #dc2743 50%, #bc1888 100%)' : '#22c55e',
+                color: 'white'
+              }}>
+                {isInstagram ? 'Instagram Direct' : 'WhatsApp Cloud'}
+              </span>
+            </div>
+            <span className="chat-subtitle" style={{opacity: 0.7, fontSize: '0.8rem'}}>{getDisplayNumber()}</span>
+          </div>
         </div>
         
         <button 

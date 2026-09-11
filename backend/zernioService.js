@@ -10,15 +10,20 @@ class ZernioService {
         this.accountId = null;
         this.status = 'disconnected';
         this.phoneNumber = null;
+        this.instagramAccountId = null;
+        this.instagramUsername = null;
+        this.instagramStatus = 'disconnected';
         this.isInitialized = false;
         this.syncInterval = null;
+        this.syncedConversations = new Map();
+        this.knownMessageIds = new Set();
     }
 
     async init() {
         if (this.isInitialized) return;
         this.isInitialized = true;
 
-        console.log('[Zernio] Inicializando servicio...');
+        console.log('[Zernio] Inicializando servicio omnicanal...');
 
         // Lectura inicial síncrona de Firestore
         try {
@@ -30,7 +35,10 @@ class ZernioService {
                 this.accountId = data.accountId || null;
                 this.status = data.status || 'disconnected';
                 this.phoneNumber = data.phoneNumber || null;
-                console.log(`[Zernio] Configuración cargada: accountId=${this.accountId}, status=${this.status}`);
+                this.instagramAccountId = data.instagramAccountId || null;
+                this.instagramUsername = data.instagramUsername || null;
+                this.instagramStatus = data.instagramStatus || 'disconnected';
+                console.log(`[Zernio] Configuración cargada: WhatsApp=${this.accountId ? 'OK' : 'No'}, Instagram=${this.instagramAccountId ? 'OK' : 'No'}`);
             }
         } catch (e) {
             console.warn('[Zernio] No se pudo leer config inicial:', e.message);
@@ -46,14 +54,17 @@ class ZernioService {
                 this.accountId = data.accountId || null;
                 this.status = data.status || 'disconnected';
                 this.phoneNumber = data.phoneNumber || null;
+                this.instagramAccountId = data.instagramAccountId || null;
+                this.instagramUsername = data.instagramUsername || null;
+                this.instagramStatus = data.instagramStatus || 'disconnected';
 
-                console.log(`[Zernio] Configuración actualizada: status=${this.status}, accountId=${this.accountId ? this.accountId.substring(0, 8) + '...' : 'ninguno'}`);
+                console.log(`[Zernio] Configuración actualizada: WA=${this.status}, IG=${this.instagramStatus}`);
 
                 if (this.apiKey && (!this.profileId || !this.accountId || keyChanged)) {
                     await this.autoDiscover();
                 }
 
-                if (this.apiKey && this.accountId) {
+                if (this.apiKey && (this.accountId || this.instagramAccountId)) {
                     this.startPeriodicSync();
                 }
             } else {
@@ -72,20 +83,30 @@ class ZernioService {
             const accounts = await this.listAccounts();
             if (accounts && accounts.length > 0) {
                 const whatsappAcc = accounts.find(a => a.platform === 'whatsapp');
+                const instagramAcc = accounts.find(a => a.platform === 'instagram');
+                const updates = { lastChecked: Date.now() };
+
                 if (whatsappAcc) {
-                    console.log(`[Zernio] ¡Cuenta de WhatsApp encontrada! ID: ${whatsappAcc._id}, Número: ${whatsappAcc.username}`);
+                    console.log(`[Zernio] WhatsApp encontrado: ID ${whatsappAcc._id} (${whatsappAcc.username})`);
                     this.accountId = whatsappAcc._id;
                     this.phoneNumber = whatsappAcc.username;
                     this.status = whatsappAcc.isActive ? 'connected' : 'inactive';
-
-                    await setDoc(doc(db, 'system', 'zernio_config'), {
-                        accountId: this.accountId,
-                        phoneNumber: this.phoneNumber,
-                        status: this.status,
-                        platform: 'whatsapp',
-                        lastChecked: Date.now()
-                    }, { merge: true });
+                    updates.accountId = this.accountId;
+                    updates.phoneNumber = this.phoneNumber;
+                    updates.status = this.status;
                 }
+
+                if (instagramAcc) {
+                    console.log(`[Zernio] Instagram encontrado: ID ${instagramAcc._id} (@${instagramAcc.username})`);
+                    this.instagramAccountId = instagramAcc._id;
+                    this.instagramUsername = instagramAcc.username;
+                    this.instagramStatus = instagramAcc.isActive ? 'connected' : 'inactive';
+                    updates.instagramAccountId = this.instagramAccountId;
+                    updates.instagramUsername = this.instagramUsername;
+                    updates.instagramStatus = this.instagramStatus;
+                }
+
+                await setDoc(doc(db, 'system', 'zernio_config'), updates, { merge: true });
             }
         } catch (err) {
             console.error('[Zernio] Error en autoDiscover:', err.message);
@@ -128,7 +149,6 @@ class ZernioService {
         return data;
     }
 
-    // Step 2: Crear perfil en Zernio
     async createProfile(name = "Consultorios Odontológicos Belgrano") {
         console.log(`[Zernio] Creando perfil: ${name}...`);
         const result = await this.apiRequest('/profiles', {
@@ -147,97 +167,79 @@ class ZernioService {
         return profile;
     }
 
-    // Step 3: Obtener URL de conexión para WhatsApp (Meta Embedded Signup)
-    async getConnectUrl(redirectUrl, onboarding = 'business_app') {
+    async getConnectUrl(platform = 'whatsapp', redirectUrl, onboarding = 'business_app') {
         if (!this.profileId) {
-            // Si no tiene perfil aún, lo crea automáticamente
             await this.createProfile();
         }
 
-        console.log(`[Zernio] Solicitando URL de conexión para WhatsApp (profileId=${this.profileId}, onboarding=${onboarding})...`);
         const queryParams = new URLSearchParams({
-            profileId: this.profileId,
-            onboarding
+            profileId: this.profileId
         });
+        if (onboarding && platform === 'whatsapp') {
+            queryParams.append('onboarding', onboarding);
+        }
         if (redirectUrl) {
             queryParams.append('redirect_url', redirectUrl);
         }
 
-        const result = await this.apiRequest(`/connect/whatsapp?${queryParams.toString()}`);
-        return result; // { authUrl: "...", state: "..." }
+        return await this.apiRequest(`/connect/${platform}?${queryParams.toString()}`);
     }
 
-    // Step 4: Listar cuentas conectadas
     async listAccounts() {
         const result = await this.apiRequest('/accounts');
         return result?.accounts || [];
     }
 
-    // Step 5: Enviar mensaje de WhatsApp
-    async sendMessage(conversationId, text, options = {}) {
-        if (!this.accountId) {
-            throw new Error('No hay cuenta de WhatsApp conectada en Zernio.');
+    async sendMessage(conversationId, text, accountId, options = {}) {
+        const targetAccountId = accountId || this.accountId;
+        if (!targetAccountId) {
+            throw new Error('No hay cuenta de mensajería activa en Zernio.');
         }
 
-        console.log(`[Zernio] Enviando mensaje a conversación ${conversationId}...`);
         const payload = {
-            accountId: this.accountId,
+            accountId: targetAccountId,
             message: text,
             ...options
         };
 
-        const result = await this.apiRequest(`/inbox/conversations/${conversationId}/messages`, {
+        return await this.apiRequest(`/inbox/conversations/${conversationId}/messages`, {
             method: 'POST',
             body: payload
         });
-        return result;
     }
 
-    // Iniciar nueva conversación por número de teléfono
-    async createConversation(participantId, options = {}) {
-        if (!this.accountId) {
-            throw new Error('No hay cuenta de WhatsApp conectada en Zernio.');
+    async createConversation(participantId, text, accountId, options = {}) {
+        const targetAccountId = accountId || this.accountId;
+        if (!targetAccountId) {
+            throw new Error('No hay cuenta de mensajería activa en Zernio.');
         }
 
-        // Formato número: dígitos sin + ni espacios
-        const cleanPhone = participantId.replace(/[^0-9]/g, '');
-        console.log(`[Zernio] Creando conversación para número ${cleanPhone}...`);
-
         const payload = {
-            accountId: this.accountId,
-            participantId: cleanPhone,
+            accountId: targetAccountId,
+            participantId: participantId,
+            message: text,
             ...options
         };
 
-        const result = await this.apiRequest('/inbox/conversations', {
+        return await this.apiRequest('/inbox/conversations', {
             method: 'POST',
             body: payload
         });
-        return result;
     }
 
-    // Listar conversaciones del Inbox de Zernio
-    async listConversations() {
-        if (!this.accountId) return [];
-        const result = await this.apiRequest(`/inbox/conversations?accountId=${this.accountId}`);
-        return result?.data || result?.conversations || [];
-    }
-
-    // Obtener mensajes de una conversación
-    async getConversationMessages(conversationId) {
-        if (!this.accountId) return [];
-        const result = await this.apiRequest(`/inbox/conversations/${conversationId}/messages?accountId=${this.accountId}`);
-        return result?.messages || result?.data || [];
-    }
-
-    // Despachar mensaje saliente desde outbox
+    // Despachar mensaje saliente desde outbox (WhatsApp o Instagram)
     async dispatchOutboxMessage(outboxData) {
         try {
             const text = outboxData.text;
-            const target = outboxData.chatId; // Ej: "54911...@c.us" o número
-            const cleanPhone = target.split('@')[0].replace(/[^0-9]/g, '');
+            const target = outboxData.chatId; // Ej: "54911...@c.us" o "ig_username"
+            const isInstagram = outboxData.channel === 'instagram' || target.startsWith('ig_');
+            const targetAccountId = isInstagram ? this.instagramAccountId : this.accountId;
 
-            console.log(`[Zernio Dispatch] Despachando a ${cleanPhone}: "${text}"`);
+            if (!targetAccountId) {
+                throw new Error(`Cuenta de ${isInstagram ? 'Instagram' : 'WhatsApp'} no conectada en Zernio.`);
+            }
+
+            console.log(`[Zernio Dispatch] Despachando a ${target} (${isInstagram ? 'Instagram' : 'WhatsApp'}): "${text}"`);
 
             // Buscar si ya tenemos un conversationId guardado para este contacto
             let conversationId = null;
@@ -249,16 +251,16 @@ class ZernioService {
             let sendResult;
             if (conversationId) {
                 try {
-                    sendResult = await this.sendMessage(conversationId, text);
+                    sendResult = await this.sendMessage(conversationId, text, targetAccountId);
                 } catch (sendErr) {
-                    console.warn(`[Zernio Dispatch] Envío directo a ${conversationId} falló (${sendErr.message}), intentando createConversation...`);
+                    console.warn(`[Zernio Dispatch] Envío directo a ${conversationId} falló (${sendErr.message}), creando conversación...`);
                     conversationId = null;
                 }
             }
 
             if (!conversationId) {
-                // Iniciar o recuperar conversación por teléfono
-                const convResult = await this.createConversation(cleanPhone, { message: text });
+                const participantClean = isInstagram ? target.replace('ig_', '') : target.split('@')[0].replace(/[^0-9]/g, '');
+                const convResult = await this.createConversation(participantClean, text, targetAccountId);
                 conversationId = convResult?.data?.conversationId || convResult?.conversationId;
                 sendResult = convResult;
 
@@ -269,21 +271,25 @@ class ZernioService {
                 }
             }
 
-            // Registrar mensaje enviado en Firestore
+            // Registrar mensaje enviado en Firestore (con tolerancia a cuotas)
             const msgId = sendResult?.data?.messageId || `zernio_${Date.now()}`;
-            await setDoc(doc(db, 'messages', msgId), {
-                id: msgId,
-                fromMe: true,
-                author: target,
-                contactName: target,
-                senderName: "Tú (Zernio)",
-                body: text,
-                timestamp: Math.floor(Date.now() / 1000),
-                type: 'chat',
-                channel: 'zernio_whatsapp',
-                hasMedia: false,
-                isAudio: false
-            });
+            try {
+                await setDoc(doc(db, 'messages', msgId), {
+                    id: msgId,
+                    fromMe: true,
+                    author: target,
+                    contactName: target,
+                    senderName: "Tú",
+                    body: text,
+                    timestamp: Math.floor(Date.now() / 1000),
+                    type: 'chat',
+                    channel: isInstagram ? 'instagram' : 'whatsapp_cloud',
+                    hasMedia: false,
+                    isAudio: false
+                });
+            } catch (fsErr) {
+                console.warn('[Firestore Write Queued]', fsErr.message);
+            }
 
             console.log(`[Zernio Dispatch] ¡Mensaje despachado con éxito! ID: ${msgId}`);
             return true;
@@ -293,45 +299,71 @@ class ZernioService {
         }
     }
 
-    // Sincronización periódica automática para mantener Firestore al día
     startPeriodicSync() {
         if (this.syncInterval) clearInterval(this.syncInterval);
-        console.log('[Zernio] Sincronización periódica activada (cada 30s)');
+        console.log('[Zernio] Sincronización periódica delta activada (cada 60s)');
 
         this.syncInterval = setInterval(async () => {
             try {
                 await this.syncInboxToFirestore();
             } catch (err) {
-                // Silencioso para no saturar logs
+                // Silencioso
             }
-        }, 30000);
+        }, 60000);
     }
 
     async syncInboxToFirestore() {
-        if (!this.apiKey || !this.accountId) return;
+        if (!this.apiKey) return;
 
+        if (this.accountId) {
+            await this.syncPlatformInbox(this.accountId, 'whatsapp');
+        }
+
+        if (this.instagramAccountId) {
+            await this.syncPlatformInbox(this.instagramAccountId, 'instagram');
+        }
+    }
+
+    async syncPlatformInbox(accountId, platform) {
         try {
-            const conversations = await this.listConversations();
-            for (const conv of conversations) {
+            const conversations = await this.apiRequest(`/inbox/conversations?accountId=${accountId}`);
+            const list = conversations?.data || conversations?.conversations || [];
+
+            for (const conv of list) {
                 const convId = conv._id || conv.id;
-                const participant = conv.participantId || conv.phone || conv.username;
+                const participant = conv.participantId || conv.participantUsername || conv.phone || conv.username;
                 if (!participant) continue;
 
-                const safeContactId = `${participant.replace(/[^0-9]/g, '')}@c.us`;
+                const convUpdated = new Date(conv.updatedTime || conv.updatedAt || conv.lastMessageAt || 0).getTime();
+                const lastSynced = this.syncedConversations.get(convId) || 0;
 
-                // Actualizar contacto
-                await setDoc(doc(db, 'contacts', safeContactId), {
-                    number: participant,
-                    name: conv.participantName || conv.name || participant,
-                    pushname: conv.participantName || null,
-                    lastActivity: Math.floor(new Date(conv.updatedTime || conv.updatedAt || conv.lastMessageAt || Date.now()).getTime() / 1000),
-                    zernioConversationId: convId,
-                    channel: 'whatsapp_cloud'
-                }, { merge: true });
+                const isIg = platform === 'instagram';
+                const safeContactId = isIg ? `ig_${conv.participantUsername || participant}` : `${participant.replace(/[^0-9]/g, '')}@c.us`;
 
-                // Sincronizar mensajes de esta conversación
-                const messages = await this.getConversationMessages(convId);
+                // Si la conversación no cambió, omitir escritura en Firestore
+                if (convUpdated > lastSynced || !this.syncedConversations.has(convId)) {
+                    await setDoc(doc(db, 'contacts', safeContactId), {
+                        number: participant,
+                        name: conv.participantName || (isIg ? `@${conv.participantUsername || participant}` : participant),
+                        pushname: conv.participantName || null,
+                        lastActivity: Math.floor((convUpdated || Date.now()) / 1000),
+                        zernioConversationId: convId,
+                        channel: isIg ? 'instagram' : 'whatsapp_cloud',
+                        platform: platform
+                    }, { merge: true });
+
+                    this.syncedConversations.set(convId, convUpdated);
+                }
+
+                // Sincronizar mensajes si hay nuevos
+                const msgRes = await this.apiRequest(`/inbox/conversations/${convId}/messages?accountId=${accountId}`);
+                const messages = msgRes?.messages || msgRes?.data || [];
+
                 for (const m of messages) {
+                    if (this.knownMessageIds.has(m.id)) {
+                        continue; // Omitir mensaje ya guardado
+                    }
+
                     const isOutgoing = m.direction === 'outgoing';
                     const isAudio = m.attachments?.some(a => a.type === 'audio' || a.voiceNote) || false;
                     const mediaUrl = m.attachments?.[0]?.url || null;
@@ -348,12 +380,15 @@ class ZernioService {
                         hasMedia: !!mediaUrl,
                         isAudio: isAudio,
                         mediaUrl: mediaUrl,
-                        channel: 'whatsapp_cloud'
+                        channel: isIg ? 'instagram' : 'whatsapp_cloud',
+                        platform: platform
                     }, { merge: true });
+
+                    this.knownMessageIds.add(m.id);
                 }
             }
         } catch (err) {
-            console.error('[Zernio Sync] Error sincronizando:', err.message);
+            console.error(`[Zernio Sync ${platform}] Error:`, err.message);
         }
     }
 }
