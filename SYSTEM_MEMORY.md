@@ -131,4 +131,7 @@ Cada vez que se realicen mejoras en el sistema:
 - [x] Integración de **Zernio API** (`https://zernio.com/api/v1`) para mensajería oficial en la nube mediante Meta Cloud API.
 - [x] Módulo **Canales & Integraciones** (`Channels.jsx`) en el CRM con gestión de API Key, creación de perfil y vinculación oficial de WhatsApp vía Meta Embedded Signup en modo coexistencia (`onboarding=business_app`).
 - [x] Despachador dual en backend (`zernioService.js`) conectado a la colección `outbox` de Firestore.
+- [x] Activación del canal **Instagram Direct (DMs & Stories)** mediante Zernio API & Meta OAuth.
+- [x] Bandeja unificada omnicanal con filtros de canal (`Todos`, `WhatsApp`, `Instagram`) en `ChatList.jsx` y badges distintivos en `ChatView.jsx`.
+- [x] Sincronización inteligente delta con caché en memoria (`syncedConversations`, `knownMessageIds`) para optimizar lecturas/escrituras en Firestore.
 
