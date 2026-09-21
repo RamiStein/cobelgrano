@@ -28,6 +28,7 @@ class ZernioService {
         this.syncInterval = null;
         this.syncedConversations = new Map();
         this.knownMessageIds = new Set();
+        this.lastAutoDiscoverTime = 0;
     }
 
     async init() {
@@ -86,7 +87,7 @@ class ZernioService {
                 this.partnerPhoneNumber = data.partnerPhoneNumber || this.partnerPhoneNumber;
                 this.partnerStatus = data.partnerStatus || this.partnerStatus;
 
-                if (this.apiKey && (!this.accountId || !this.partnerAccountId || keyChanged)) {
+                if (this.apiKey && (keyChanged || (!this.accountId && Date.now() - this.lastAutoDiscoverTime > 300000))) {
                     await this.autoDiscover();
                 }
 
@@ -104,6 +105,8 @@ class ZernioService {
 
     async autoDiscover() {
         if (!this.apiKey) return;
+        if (Date.now() - this.lastAutoDiscoverTime < 60000) return; // Respetar rate limits
+        this.lastAutoDiscoverTime = Date.now();
         try {
             console.log('[Zernio] Comprobando perfiles y cuentas conectadas...');
             const accounts = await this.listAccounts();
@@ -358,7 +361,7 @@ class ZernioService {
     }
 
     startPeriodicSync() {
-        if (this.syncInterval) clearInterval(this.syncInterval);
+        if (this.syncInterval) return;
         console.log('[Zernio] Sincronización periódica multi-espacio activada (cada 60s)');
 
         this.syncInterval = setInterval(async () => {
