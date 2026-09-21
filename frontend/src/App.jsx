@@ -189,7 +189,7 @@ function App() {
   const isCurrentConnected = currentWorkspace === 'cob' ? isCobConnected : isPersonalConnected;
 
   return (
-    <div className="app-container fade-in">
+    <div className={`app-container fade-in ${currentWorkspace === 'personal' ? 'workspace-personal' : 'workspace-cob'}`}>
       {/* Sidebar Navigation */}
       <div 
         className="sidebar" 

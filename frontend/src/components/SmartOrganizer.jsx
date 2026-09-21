@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   Sparkles, CheckCircle2, Circle, Clock, Tag, MessageSquare, 
   Trash2, Plus, Search, Filter, AlertCircle, Calendar, ShoppingBag, 
-  GraduationCap, Gift, Users, ExternalLink, Check, ChevronRight, X
+  GraduationCap, Gift, Users, ExternalLink, Check, ChevronRight, X, Share2
 } from 'lucide-react';
 import { db } from '../firebase';
 import { 
@@ -25,6 +25,59 @@ export default function SmartOrganizer({ onOpenChat }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('pending'); // 'all', 'pending', 'completed'
   const [showAddModal, setShowAddModal] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopySummary = () => {
+    const pendings = notes.filter(n => n.status !== 'completado');
+    if (pendings.length === 0) {
+      alert('No hay tareas pendientes en este momento.');
+      return;
+    }
+
+    let text = '📋 *RESUMEN DE PENDIENTES - FAMILIA*\n\n';
+
+    const colegio = pendings.filter(n => n.category === 'colegio');
+    if (colegio.length > 0) {
+      text += '🎒 *COLEGIO & NIÑOS:*\n';
+      colegio.forEach(c => {
+        text += `▫️ *${c.title}*\n   _Grupo/Origen:_ ${c.sourceName}\n   "${c.originalText.slice(0, 100)}"\n`;
+      });
+      text += '\n';
+    }
+
+    const cumple = pendings.filter(n => n.category === 'cumpleanos');
+    if (cumple.length > 0) {
+      text += '🎂 *CUMPLEAÑOS & FESTEJOS:*\n';
+      cumple.forEach(c => {
+        text += `▫️ *${c.title}*\n   "${c.originalText.slice(0, 100)}"\n`;
+      });
+      text += '\n';
+    }
+
+    const compras = pendings.filter(n => n.category === 'compras');
+    if (compras.length > 0) {
+      text += '🛒 *COMPRAS & ENCARGOS:*\n';
+      compras.forEach(c => {
+        text += `▫️ *${c.title}*\n`;
+      });
+      text += '\n';
+    }
+
+    const compromisos = pendings.filter(n => n.category === 'compromisos');
+    if (compromisos.length > 0) {
+      text += '📅 *COMPROMISOS / FAMILIA:*\n';
+      compromisos.forEach(c => {
+        text += `▫️ *${c.title}*\n`;
+      });
+      text += '\n';
+    }
+
+    text += '✨ _Organizado automáticamente por el CRM Inteligente_';
+
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 3000);
+  };
 
   // Formulario de nueva nota manual
   const [newNote, setNewNote] = useState({
@@ -188,27 +241,51 @@ export default function SmartOrganizer({ onOpenChat }) {
           </p>
         </div>
 
-        <button
-          onClick={() => setShowAddModal(true)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            backgroundColor: '#6366f1',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            padding: '0.6rem 1.1rem',
-            fontSize: '0.85rem',
-            fontWeight: '600',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s',
-            boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)'
-          }}
-        >
-          <Plus size={16} />
-          Agregar Nota Manual
-        </button>
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+          <button
+            onClick={handleCopySummary}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              backgroundColor: copied ? '#10b981' : 'var(--bg-secondary)',
+              color: copied ? 'white' : 'var(--text-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.6rem 1rem',
+              fontSize: '0.85rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+            }}
+          >
+            {copied ? <Check size={16} /> : <Share2 size={16} />}
+            {copied ? '¡Copiado para WhatsApp!' : 'Copiar para WhatsApp'}
+          </button>
+
+          <button
+            onClick={() => setShowAddModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              backgroundColor: '#6366f1',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '0.6rem 1.1rem',
+              fontSize: '0.85rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              transition: 'background-color 0.2s',
+              boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)'
+            }}
+          >
+            <Plus size={16} />
+            Agregar Tarea Manual
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
