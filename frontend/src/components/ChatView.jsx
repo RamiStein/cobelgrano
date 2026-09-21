@@ -110,11 +110,13 @@ function ChatView({ chat, onTagUpdated }) {
     const targetChat = chat.contactId || chat.author;
     
     const isInstagram = chat.channel === 'instagram' || chat.author?.startsWith('ig_');
+    const ws = chat.workspaceId || 'cob';
     try {
         await addDoc(collection(db, 'outbox'), {
             chatId: targetChat,
             text: textToSend,
             channel: isInstagram ? 'instagram' : 'whatsapp',
+            workspaceId: ws,
             createdAt: new Date().getTime()
         });
     } catch (err) {

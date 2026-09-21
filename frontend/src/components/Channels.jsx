@@ -38,7 +38,12 @@ export default function Channels() {
     status: 'disconnected', // 'disconnected', 'ready_to_connect', 'connected'
     instagramAccountId: '',
     instagramUsername: '',
-    instagramStatus: 'disconnected'
+    instagramStatus: 'disconnected',
+    // Workspace Personal (Compañera)
+    partnerProfileId: '6ab071431eb011d0b9ddaef7',
+    partnerAccountId: '',
+    partnerPhoneNumber: '',
+    partnerStatus: 'disconnected'
   });
 
   const [inputApiKey, setInputApiKey] = useState('');
@@ -79,19 +84,36 @@ export default function Channels() {
     try {
       setLoading(true);
       const cleanPhone = username ? decodeURIComponent(username) : '';
-      await setDoc(doc(db, 'system', 'zernio_config'), {
-        accountId: accId,
-        phoneNumber: cleanPhone,
-        status: 'connected',
-        platform: 'whatsapp',
-        profileId: profId || config.profileId || null,
-        updatedAt: Date.now()
-      }, { merge: true });
+      const isPersonal = profId === '6ab071431eb011d0b9ddaef7' || profId === config.partnerProfileId;
 
-      setStatusMessage({
-        type: 'success',
-        text: `¡WhatsApp vinculado exitosamente con Meta Cloud y Zernio! Número: ${cleanPhone}`
-      });
+      if (isPersonal) {
+        await setDoc(doc(db, 'system', 'zernio_config'), {
+          partnerAccountId: accId,
+          partnerPhoneNumber: cleanPhone,
+          partnerStatus: 'connected',
+          partnerProfileId: profId || '6ab071431eb011d0b9ddaef7',
+          updatedAt: Date.now()
+        }, { merge: true });
+
+        setStatusMessage({
+          type: 'success',
+          text: `¡WhatsApp Personal (Compañera) vinculado con éxito! Número: ${cleanPhone}`
+        });
+      } else {
+        await setDoc(doc(db, 'system', 'zernio_config'), {
+          accountId: accId,
+          phoneNumber: cleanPhone,
+          status: 'connected',
+          platform: 'whatsapp',
+          profileId: profId || config.profileId || null,
+          updatedAt: Date.now()
+        }, { merge: true });
+
+        setStatusMessage({
+          type: 'success',
+          text: `¡WhatsApp COB vinculado exitosamente con Meta Cloud y Zernio! Número: ${cleanPhone}`
+        });
+      }
 
       window.history.replaceState({}, document.title, window.location.pathname);
     } catch (err) {
@@ -287,7 +309,50 @@ export default function Channels() {
     }
   };
 
-  // Comprobar cuentas existentes en Zernio (WhatsApp e Instagram)
+  // Paso 2B: Iniciar Meta Embedded Signup para WhatsApp Personal (Compañera)
+  const handleConnectWhatsAppPartner = async () => {
+    const key = config.apiKey || inputApiKey.trim();
+    if (!key) {
+      setStatusMessage({ type: 'error', text: 'Falta la API Key de Zernio.' });
+      return;
+    }
+
+    setLoading(true);
+    setStatusMessage({ type: 'info', text: 'Generando enlace oficial para la línea de tu compañera...' });
+    try {
+      const pId = config.partnerProfileId || '6ab071431eb011d0b9ddaef7';
+      const redirectUrl = window.location.origin;
+      const queryParams = new URLSearchParams({
+        profileId: pId,
+        onboarding: 'business_app',
+        redirect_url: redirectUrl
+      });
+
+      const res = await fetch(`${ZERNIO_BASE_URL}/connect/whatsapp?${queryParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || 'Error obteniendo enlace de conexión');
+
+      if (data.authUrl) {
+        setStatusMessage({
+          type: 'info',
+          text: 'Redirigiendo a Meta para vincular la línea de tu compañera...'
+        });
+        window.location.href = data.authUrl;
+      }
+    } catch (err) {
+      setStatusMessage({ type: 'error', text: `Error al conectar WhatsApp Personal: ${err.message}` });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Comprobar cuentas existentes en Zernio (COB + Personal + Instagram)
   const checkAccounts = async (customKey) => {
     const key = customKey || config.apiKey || inputApiKey.trim();
     if (!key) return;
@@ -303,28 +368,41 @@ export default function Channels() {
 
       const data = await res.json();
       if (res.ok && data.accounts) {
-        const whatsappAcc = data.accounts.find(a => a.platform === 'whatsapp');
-        const instagramAcc = data.accounts.find(a => a.platform === 'instagram');
-
         const updatePayload = { lastChecked: Date.now() };
 
-        if (whatsappAcc) {
-          updatePayload.accountId = whatsappAcc._id;
-          updatePayload.phoneNumber = whatsappAcc.username;
-          updatePayload.status = whatsappAcc.isActive ? 'connected' : 'inactive';
-        }
+        for (const acc of data.accounts) {
+          const profId = acc.profileId?._id || acc.profileId;
+          const profName = (acc.profileId?.name || '').toLowerCase();
 
-        if (instagramAcc) {
-          updatePayload.instagramAccountId = instagramAcc._id;
-          updatePayload.instagramUsername = instagramAcc.username;
-          updatePayload.instagramStatus = instagramAcc.isActive ? 'connected' : 'inactive';
+          if (acc.platform === 'whatsapp') {
+            const isPersonal = profId === '6ab071431eb011d0b9ddaef7' || 
+                               profId === config.partnerProfileId || 
+                               profName.includes('personal') || 
+                               profName.includes('familia') || 
+                               profName.includes('compañera');
+
+            if (isPersonal) {
+              updatePayload.partnerAccountId = acc._id;
+              updatePayload.partnerPhoneNumber = acc.username;
+              updatePayload.partnerStatus = acc.isActive ? 'connected' : 'inactive';
+            } else {
+              updatePayload.accountId = acc._id;
+              updatePayload.phoneNumber = acc.username;
+              updatePayload.status = acc.isActive ? 'connected' : 'inactive';
+            }
+          } else if (acc.platform === 'instagram') {
+            updatePayload.instagramAccountId = acc._id;
+            updatePayload.instagramUsername = acc.username;
+            updatePayload.instagramStatus = acc.isActive ? 'connected' : 'inactive';
+          }
         }
 
         await setDoc(doc(db, 'system', 'zernio_config'), updatePayload, { merge: true });
 
         const statusTexts = [];
-        if (whatsappAcc) statusTexts.push(`WhatsApp: ${whatsappAcc.username}`);
-        if (instagramAcc) statusTexts.push(`Instagram: @${instagramAcc.username}`);
+        if (updatePayload.phoneNumber) statusTexts.push(`COB: ${updatePayload.phoneNumber}`);
+        if (updatePayload.partnerPhoneNumber) statusTexts.push(`Personal: ${updatePayload.partnerPhoneNumber}`);
+        if (updatePayload.instagramUsername) statusTexts.push(`Instagram: @${updatePayload.instagramUsername}`);
 
         setStatusMessage({
           type: 'success',
@@ -341,6 +419,7 @@ export default function Channels() {
   };
 
   const isWhatsAppConnected = config.status === 'connected' && config.accountId;
+  const isPartnerWhatsAppConnected = config.partnerStatus === 'connected' && config.partnerAccountId;
   const isInstagramConnected = config.instagramStatus === 'connected' && config.instagramAccountId;
 
   return (
@@ -570,6 +649,141 @@ export default function Channels() {
               <RefreshCw size={16} className={syncing ? 'spin' : ''} />
               {syncing ? 'Verificando...' : 'Comprobar Estado'}
             </button>
+          </div>
+        </div>
+
+        {/* WhatsApp Personal & Familia (Compañera) Card */}
+        <div style={{
+          backgroundColor: 'var(--bg-secondary)',
+          borderRadius: '12px',
+          border: isPartnerWhatsAppConnected ? '2px solid #6366f1' : '1px solid var(--border)',
+          padding: '1.5rem',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
+          position: 'relative'
+        }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '8px',
+                  backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <MessageSquare size={22} color="#6366f1" />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>WhatsApp Personal (Compañera)</h3>
+                  </div>
+                  <span style={{ fontSize: '0.8rem', color: '#818cf8', fontWeight: '600' }}>Grupos Escolares & Familia</span>
+                </div>
+              </div>
+
+              <span style={{
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                backgroundColor: isPartnerWhatsAppConnected ? 'rgba(99, 102, 241, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                color: isPartnerWhatsAppConnected ? '#818cf8' : '#f59e0b'
+              }}>
+                <span style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: isPartnerWhatsAppConnected ? '#6366f1' : '#f59e0b'
+                }} />
+                {isPartnerWhatsAppConnected ? 'Conectado 24/7' : 'Listo para Vincular'}
+              </span>
+            </div>
+
+            {isPartnerWhatsAppConnected ? (
+              <div style={{
+                backgroundColor: 'var(--bg-primary)',
+                padding: '1rem',
+                borderRadius: '8px',
+                marginBottom: '1rem',
+                fontSize: '0.85rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Número Vinculado:</span>
+                  <strong>{config.partnerPhoneNumber}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Espacio de Trabajo:</span>
+                  <span style={{ color: '#818cf8', fontWeight: 'bold' }}>🏠 Personal & Familiar</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Organizador Inteligente:</span>
+                  <span style={{ color: '#10b981', fontWeight: 'bold' }}>✓ Activo (Colegio, Cumpleaños, Compras)</span>
+                </div>
+              </div>
+            ) : (
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: '1.4' }}>
+                Conecta la línea de tu compañera con Meta Embedded Signup para que el sistema procese automáticamente sus grupos escolares (tareas, flautas, avisos), cumpleaños y compras familiares con aislamiento total de COB.
+              </p>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
+            {isPartnerWhatsAppConnected ? (
+              <button
+                onClick={() => checkAccounts()}
+                disabled={syncing}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  color: 'var(--text-primary)',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <RefreshCw size={16} className={syncing ? 'spin' : ''} />
+                {syncing ? 'Verificando...' : 'Comprobar Estado'}
+              </button>
+            ) : (
+              <button
+                onClick={handleConnectWhatsAppPartner}
+                disabled={loading}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem',
+                  backgroundColor: '#6366f1',
+                  border: 'none',
+                  borderRadius: '8px',
+                  color: 'white',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem',
+                  boxShadow: '0 4px 12px rgba(99, 102, 241, 0.35)'
+                }}
+              >
+                <ExternalLink size={16} />
+                ⚡ Vincular Teléfono de mi Compañera
+              </button>
+            )}
           </div>
         </div>
 

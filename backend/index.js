@@ -259,7 +259,7 @@ async function start() {
                 const data = change.doc.data();
                 try {
                     console.log(`[Outbox] Despachando mensaje hacia ${data.chatId}...`);
-                    if (zernioService.apiKey && zernioService.accountId) {
+                    if (zernioService.apiKey && (zernioService.accountId || zernioService.partnerAccountId)) {
                         console.log('[Outbox] Enviando a través de Zernio Meta Cloud API...');
                         await zernioService.dispatchOutboxMessage(data);
                     } else if (client) {
