@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { 
   Sparkles, CheckCircle2, Circle, Clock, Tag, MessageSquare, 
   Trash2, Plus, Search, Filter, AlertCircle, Calendar, ShoppingBag, 
-  GraduationCap, Gift, Users, ExternalLink, Check, ChevronRight, X, Share2
+  GraduationCap, Gift, Users, ExternalLink, Check, ChevronRight, X, Share2,
+  QrCode as QrIcon, ArrowRight
 } from 'lucide-react';
 import { db } from '../firebase';
 import { 
@@ -18,7 +19,7 @@ const CATEGORIES = {
   compromisos: { id: 'compromisos', label: 'Compromisos / Familia', icon: Calendar, color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },
 };
 
-export default function SmartOrganizer({ onOpenChat }) {
+export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPartnerConnected }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -287,6 +288,69 @@ export default function SmartOrganizer({ onOpenChat }) {
           </button>
         </div>
       </div>
+
+      {/* Banner de Vinculación de WhatsApp si no está conectado */}
+      {!isPartnerConnected && (
+        <div style={{
+          margin: '1.25rem 2rem 0',
+          padding: '1.1rem 1.4rem',
+          backgroundColor: 'rgba(99, 102, 241, 0.12)',
+          border: '1.5px solid #6366f1',
+          borderRadius: '14px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '1rem',
+          flexWrap: 'wrap',
+          boxShadow: '0 4px 20px rgba(99, 102, 241, 0.15)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
+            <div style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '10px',
+              backgroundColor: '#6366f1',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0
+            }}>
+              <QrIcon size={24} color="#ffffff" />
+            </div>
+            <div>
+              <strong style={{ fontSize: '1rem', color: '#ffffff', display: 'block' }}>
+                Línea de WhatsApp de tu compañera pendiente de vincular
+              </strong>
+              <span style={{ fontSize: '0.82rem', color: '#c7d2fe' }}>
+                Para que el organizador lea automáticamente las tareas, flautas, cumpleaños y grupos de ella, escanea el código QR oficial.
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={onNavigateToChannels}
+            type="button"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.65rem 1.25rem',
+              backgroundColor: '#6366f1',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '0.85rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              transition: 'background 0.2s',
+              boxShadow: '0 2px 10px rgba(99, 102, 241, 0.4)'
+            }}
+          >
+            <QrIcon size={16} />
+            Ver Código QR de Vinculación <ArrowRight size={16} />
+          </button>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div style={{

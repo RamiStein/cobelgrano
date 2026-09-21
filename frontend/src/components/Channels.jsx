@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { 
   Radio, CheckCircle2, AlertCircle, RefreshCw, Key, ExternalLink, 
-  MessageSquare, ShieldCheck, Check, Sparkles, Smartphone, Share2
+  MessageSquare, ShieldCheck, Check, Sparkles, Smartphone, Share2, QrCode as QrIcon
 } from 'lucide-react';
+import QRCode from 'react-qr-code';
 import { db } from '../firebase';
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 
@@ -52,6 +53,43 @@ export default function Channels() {
   const [statusMessage, setStatusMessage] = useState(null);
   const [syncing, setSyncing] = useState(false);
 
+  // QR y enlace de WhatsApp Personal
+  const [partnerAuthUrl, setPartnerAuthUrl] = useState('');
+  const [loadingPartnerQr, setLoadingPartnerQr] = useState(false);
+  const [copiedPartnerLink, setCopiedPartnerLink] = useState(false);
+
+  const fetchPartnerAuthUrl = async (customKey) => {
+    const key = customKey || config.apiKey || inputApiKey.trim();
+    if (!key) return;
+
+    setLoadingPartnerQr(true);
+    try {
+      const pId = config.partnerProfileId || '6ab071431eb011d0b9ddaef7';
+      const redirectUrl = window.location.origin;
+      const queryParams = new URLSearchParams({
+        profileId: pId,
+        onboarding: 'business_app',
+        redirect_url: redirectUrl
+      });
+
+      const res = await fetch(`${ZERNIO_BASE_URL}/connect/whatsapp?${queryParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await res.json();
+      if (res.ok && data.authUrl) {
+        setPartnerAuthUrl(data.authUrl);
+      }
+    } catch (err) {
+      console.error('Error obteniendo QR de WhatsApp Personal:', err);
+    } finally {
+      setLoadingPartnerQr(false);
+    }
+  };
+
   // 1. Escuchar la configuración en Firestore
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'system', 'zernio_config'), (docSnap) => {
@@ -60,6 +98,9 @@ export default function Channels() {
         setConfig(prev => ({ ...prev, ...data }));
         if (data.apiKey && !inputApiKey) {
           setInputApiKey(data.apiKey);
+        }
+        if (data.apiKey && data.partnerStatus !== 'connected') {
+          fetchPartnerAuthUrl(data.apiKey);
         }
       }
     });
@@ -731,59 +772,138 @@ export default function Channels() {
                 </div>
               </div>
             ) : (
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem', lineHeight: '1.4' }}>
-                Conecta la línea de tu compañera con Meta Embedded Signup para que el sistema procese automáticamente sus grupos escolares (tareas, flautas, avisos), cumpleaños y compras familiares con aislamiento total de COB.
-              </p>
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                textAlign: 'center',
+                backgroundColor: 'var(--bg-primary)',
+                padding: '1.25rem 1rem',
+                borderRadius: '12px',
+                border: '1px dashed rgba(99, 102, 241, 0.4)',
+                margin: '0.5rem 0 1rem'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', marginBottom: '0.35rem' }}>
+                  <QrIcon size={18} />
+                  <strong style={{ fontSize: '0.95rem' }}>Escanear Código QR con el celular</strong>
+                </div>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: '300px', margin: '0 0 1rem 0', lineHeight: '1.35' }}>
+                  Apunta la cámara del celular de tu compañera a este código QR para abrir la vinculación oficial en su teléfono:
+                </p>
+
+                {partnerAuthUrl ? (
+                  <div style={{
+                    backgroundColor: '#ffffff',
+                    padding: '14px',
+                    borderRadius: '14px',
+                    boxShadow: '0 6px 24px rgba(0,0,0,0.3)',
+                    marginBottom: '1rem',
+                    display: 'inline-block'
+                  }}>
+                    <QRCode value={partnerAuthUrl} size={180} />
+                  </div>
+                ) : (
+                  <div style={{ padding: '1.5rem', textAlign: 'center' }}>
+                    {loadingPartnerQr ? (
+                      <span style={{ fontSize: '0.85rem', color: '#818cf8', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <RefreshCw size={16} className="spin" /> Generando código QR oficial de Meta...
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => fetchPartnerAuthUrl()}
+                        style={{
+                          padding: '0.6rem 1.2rem',
+                          backgroundColor: '#6366f1',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ⚡ Generar Código QR Ahora
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {partnerAuthUrl && (
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center', width: '100%' }}>
+                    <a
+                      href={partnerAuthUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.45rem 0.8rem',
+                        backgroundColor: '#6366f1',
+                        color: 'white',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
+                        fontWeight: '600',
+                        textDecoration: 'none'
+                      }}
+                    >
+                      <ExternalLink size={13} />
+                      Abrir en esta pantalla
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(partnerAuthUrl);
+                        setCopiedPartnerLink(true);
+                        setTimeout(() => setCopiedPartnerLink(false), 3000);
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.45rem 0.8rem',
+                        backgroundColor: copiedPartnerLink ? '#10b981' : 'var(--bg-secondary)',
+                        color: copiedPartnerLink ? 'white' : 'var(--text-primary)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
+                        fontWeight: '600',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {copiedPartnerLink ? <Check size={13} /> : <Share2 size={13} />}
+                      {copiedPartnerLink ? '¡Enlace copiado!' : 'Copiar enlace'}
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-            {isPartnerWhatsAppConnected ? (
-              <button
-                onClick={() => checkAccounts()}
-                disabled={syncing}
-                style={{
-                  flex: 1,
-                  padding: '0.75rem',
-                  backgroundColor: 'var(--bg-primary)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  color: 'var(--text-primary)',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.5rem'
-                }}
-              >
-                <RefreshCw size={16} className={syncing ? 'spin' : ''} />
-                {syncing ? 'Verificando...' : 'Comprobar Estado'}
-              </button>
-            ) : (
-              <button
-                onClick={handleConnectWhatsAppPartner}
-                disabled={loading}
-                style={{
-                  flex: 1,
-                  padding: '0.75rem',
-                  backgroundColor: '#6366f1',
-                  border: 'none',
-                  borderRadius: '8px',
-                  color: 'white',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.5rem',
-                  boxShadow: '0 4px 12px rgba(99, 102, 241, 0.35)'
-                }}
-              >
-                <ExternalLink size={16} />
-                ⚡ Vincular Teléfono de mi Compañera
-              </button>
-            )}
+          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <button
+              onClick={() => checkAccounts()}
+              disabled={syncing}
+              style={{
+                flex: 1,
+                padding: '0.75rem',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                color: 'var(--text-primary)',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <RefreshCw size={16} className={syncing ? 'spin' : ''} />
+              {syncing ? 'Verificando...' : (isPartnerWhatsAppConnected ? 'Comprobar Estado' : '🔄 Ya lo vinculé / Comprobar')}
+            </button>
           </div>
         </div>
 

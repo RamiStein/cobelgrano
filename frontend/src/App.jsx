@@ -454,7 +454,11 @@ function App() {
       {/* Main Area */}
       <div className="main-area">
         {activeTab === 'organizer' ? (
-           <SmartOrganizer onOpenChat={handleOpenChatFromOrganizer} />
+           <SmartOrganizer 
+              onOpenChat={handleOpenChatFromOrganizer} 
+              onNavigateToChannels={() => setActiveTab('channels')}
+              isPartnerConnected={isPersonalConnected}
+           />
         ) : activeTab === 'dashboard' ? (
            <Dashboard />
         ) : activeTab === 'marketing' ? (
