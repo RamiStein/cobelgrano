@@ -19,7 +19,7 @@ const CATEGORIES = {
   compromisos: { id: 'compromisos', label: 'Compromisos / Familia', icon: Calendar, color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },
 };
 
-export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPartnerConnected }) {
+export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPartnerConnected, resetKey }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -27,6 +27,15 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
   const [statusFilter, setStatusFilter] = useState('pending'); // 'all', 'pending', 'completed'
   const [showAddModal, setShowAddModal] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Al hacer clic en la estrellita desde el menú lateral, restablecer filtros a "Todos"
+  useEffect(() => {
+    if (resetKey) {
+      setSelectedCategory('all');
+      setStatusFilter('pending');
+      setSearchQuery('');
+    }
+  }, [resetKey]);
 
   const handleCopySummary = () => {
     const pendings = notes.filter(n => n.status !== 'completado');

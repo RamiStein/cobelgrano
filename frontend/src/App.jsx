@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   MessageCircle, Activity, Globe, Megaphone, Radio, 
-  LogOut, Sparkles, Building2, Home, Users, CheckSquare 
+  LogOut, Sparkles, Building2, Home, Users, CheckSquare,
+  QrCode as QrIcon, Check, Copy, ExternalLink, RefreshCw, X, ShieldCheck
 } from 'lucide-react';
+import QRCode from 'react-qr-code';
 import './App.css';
 import Dashboard from './components/Dashboard';
 import ChatList from './components/ChatList';
@@ -13,7 +15,7 @@ import Channels from './components/Channels';
 import SmartOrganizer from './components/SmartOrganizer';
 import Login from './components/Login';
 import { db, auth } from './firebase';
-import { doc, onSnapshot, collection, query, orderBy, limit, where, addDoc } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query, orderBy, limit, where, addDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
 function App() {
@@ -29,6 +31,15 @@ function App() {
   const [isReady, setIsReady] = useState(false);
   const [zernioStatus, setZernioStatus] = useState('disconnected');
   const [partnerZernioStatus, setPartnerZernioStatus] = useState('disconnected');
+  const [zernioConfig, setZernioConfig] = useState(null);
+
+  // Modal de estado y conexión rápida
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
+  const [partnerAuthUrl, setPartnerAuthUrl] = useState('');
+  const [loadingPartnerQr, setLoadingPartnerQr] = useState(false);
+  const [copiedPartnerLink, setCopiedPartnerLink] = useState(false);
+  const [checkingConnection, setCheckingConnection] = useState(false);
+  const [organizerResetKey, setOrganizerResetKey] = useState(0);
   
   // Tab activo por defecto según espacio
   const [activeTab, setActiveTab] = useState(() => {
@@ -42,6 +53,80 @@ function App() {
   const [personalPendingCount, setPersonalPendingCount] = useState(0);
   
   const sessionStartRef = useRef(null);
+
+  const fetchPartnerAuthUrl = async (customKey) => {
+    const key = customKey || zernioConfig?.apiKey || 'sk_8e06ac9cdb51753e1992f6286a6dc3277d525ca5704639fcc577e403e2ccddb4';
+    if (!key) return;
+
+    setLoadingPartnerQr(true);
+    try {
+      const pId = zernioConfig?.partnerProfileId || '6ab071431eb011d0b9ddaef7';
+      const redirectUrl = window.location.origin;
+      const queryParams = new URLSearchParams({
+        profileId: pId,
+        onboarding: 'business_app',
+        redirect_url: redirectUrl
+      });
+
+      const res = await fetch(`https://zernio.com/api/v1/connect/whatsapp?${queryParams.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await res.json();
+      if (res.ok && data.authUrl) {
+        setPartnerAuthUrl(data.authUrl);
+      }
+    } catch (err) {
+      console.error('Error obteniendo QR de WhatsApp Personal:', err);
+    } finally {
+      setLoadingPartnerQr(false);
+    }
+  };
+
+  const handleCheckConnection = async () => {
+    setCheckingConnection(true);
+    try {
+      const key = zernioConfig?.apiKey || 'sk_8e06ac9cdb51753e1992f6286a6dc3277d525ca5704639fcc577e403e2ccddb4';
+      const res = await fetch('https://zernio.com/api/v1/accounts', {
+        headers: {
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await res.json();
+      if (res.ok && data.accounts) {
+        let foundPartner = false;
+        for (const acc of data.accounts) {
+          const profId = acc.profileId?._id || acc.profileId;
+          const profName = (acc.profileId?.name || '').toLowerCase();
+          if (acc.platform === 'whatsapp') {
+            if (profId === '6ab071431eb011d0b9ddaef7' || profName.includes('personal') || profName.includes('familia')) {
+              await setDoc(doc(db, 'system', 'zernio_config'), {
+                partnerAccountId: acc._id,
+                partnerPhoneNumber: acc.username,
+                partnerStatus: acc.isActive ? 'connected' : 'inactive',
+                lastChecked: Date.now()
+              }, { merge: true });
+              foundPartner = true;
+              alert(`¡Línea detectada con éxito! Número: ${acc.username}`);
+              setShowConnectionModal(false);
+              break;
+            }
+          }
+        }
+        if (!foundPartner) {
+          alert('Aún no se detectó la vinculación. Apunta la cámara del celular de tu compañera al código QR o abre el enlace.');
+        }
+      }
+    } catch (e) {
+      console.error('Error comprobando cuentas:', e);
+    } finally {
+      setCheckingConnection(false);
+    }
+  };
 
   // Cambiar de espacio de trabajo con persistencia
   const handleSwitchWorkspace = (workspace) => {
@@ -71,6 +156,10 @@ function App() {
         const data = docSnap.data();
         setZernioStatus(data.status || 'disconnected');
         setPartnerZernioStatus(data.partnerStatus || 'disconnected');
+        setZernioConfig(data);
+        if (data.apiKey && data.partnerStatus !== 'connected') {
+          fetchPartnerAuthUrl(data.apiKey);
+        }
       }
     });
 
@@ -283,19 +372,44 @@ function App() {
             </button>
           </div>
 
-          {/* Status dot */}
-          <div 
-            className="status-dot" 
-            style={{ 
-              backgroundColor: isCurrentConnected ? '#10b981' : '#f59e0b',
-              boxShadow: isCurrentConnected ? '0 0 10px #10b981' : '0 0 10px #f59e0b'
+          {/* Status dot / Connection Indicator Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setShowConnectionModal(true);
+              if (currentWorkspace === 'personal' && !isPersonalConnected && !partnerAuthUrl) {
+                fetchPartnerAuthUrl();
+              }
             }}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: '6px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '50%',
+              transition: 'transform 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.35)'}
+            onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
             title={
               currentWorkspace === 'cob' 
-                ? (isCobConnected ? "Línea COB Conectada 24/7" : "Línea COB Desconectada") 
-                : (isPersonalConnected ? "Línea Personal Conectada 24/7" : "Línea Personal Lista para Vincular")
+                ? (isCobConnected ? "🟢 Línea COB Conectada 24/7 (Clic para ver estado)" : "🟡 Línea COB Desconectada (Clic para conectar)") 
+                : (isPersonalConnected ? "🟢 Línea Personal Conectada 24/7 (Clic para ver estado)" : "🟡 Línea Personal Pendiente de Vincular (Clic para escanear QR y vincular)")
             }
-          />
+          >
+            <div 
+              className="status-dot" 
+              style={{ 
+                width: '12px',
+                height: '12px',
+                backgroundColor: isCurrentConnected ? '#10b981' : '#f59e0b',
+                boxShadow: isCurrentConnected ? '0 0 10px #10b981' : '0 0 12px #f59e0b'
+              }}
+            />
+          </button>
 
           {/* Navigation Items: COB Workspace */}
           {currentWorkspace === 'cob' ? (
@@ -365,13 +479,25 @@ function App() {
             /* Navigation Items: Personal Workspace (Compañera) */
             <>
               <button 
-                onClick={() => { setActiveTab('organizer'); setActiveChat(null); }}
+                onClick={() => { 
+                  setActiveTab('organizer'); 
+                  setActiveChat(null); 
+                  setOrganizerResetKey(prev => prev + 1);
+                }}
                 style={{ 
-                  position: 'relative',
-                  background: 'none', 
-                  border: 'none', 
-                  color: activeTab === 'organizer' ? '#6366f1' : 'var(--text-secondary)', 
-                  cursor: 'pointer' 
+                  position: 'relative', 
+                  width: '42px',
+                  height: '42px',
+                  borderRadius: '10px',
+                  border: 'none',
+                  backgroundColor: activeTab === 'organizer' ? 'rgba(99, 102, 241, 0.25)' : 'transparent',
+                  color: activeTab === 'organizer' ? '#818cf8' : 'var(--text-secondary)', 
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.2s',
+                  boxShadow: activeTab === 'organizer' ? '0 0 12px rgba(99, 102, 241, 0.35)' : 'none'
                 }}
                 title="Organizador Inteligente (Colegio, Cumpleaños, Compras)"
               >
@@ -379,14 +505,15 @@ function App() {
                 {personalPendingCount > 0 && (
                   <span style={{
                     position: 'absolute',
-                    top: '-5px',
-                    right: '-5px',
+                    top: '-4px',
+                    right: '-4px',
                     background: '#ec4899',
                     color: 'white',
                     borderRadius: '999px',
                     fontSize: '0.65rem',
                     fontWeight: 'bold',
-                    padding: '2px 6px'
+                    padding: '2px 6px',
+                    border: '2px solid var(--bg-secondary)'
                   }}>
                     {personalPendingCount}
                   </span>
@@ -458,6 +585,7 @@ function App() {
               onOpenChat={handleOpenChatFromOrganizer} 
               onNavigateToChannels={() => setActiveTab('channels')}
               isPartnerConnected={isPersonalConnected}
+              resetKey={organizerResetKey}
            />
         ) : activeTab === 'dashboard' ? (
            <Dashboard />
@@ -524,6 +652,288 @@ function App() {
            </div>
         )}
       </div>
+
+      {/* Modal de Conexión y Estado de WhatsApp */}
+      {showConnectionModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.75)',
+          backdropFilter: 'blur(6px)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1rem'
+        }}>
+          <div style={{
+            backgroundColor: 'var(--bg-secondary)',
+            border: `1.5px solid ${isCurrentConnected ? '#10b981' : '#f59e0b'}`,
+            borderRadius: '16px',
+            width: '100%',
+            maxWidth: '460px',
+            padding: '1.75rem',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1.25rem',
+            position: 'relative'
+          }}>
+            {/* Close Button */}
+            <button
+              onClick={() => setShowConnectionModal(false)}
+              style={{
+                position: 'absolute',
+                top: '1rem',
+                right: '1rem',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: '4px'
+              }}
+            >
+              <X size={20} />
+            </button>
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{
+                width: '42px',
+                height: '42px',
+                borderRadius: '10px',
+                backgroundColor: currentWorkspace === 'personal' ? 'rgba(99, 102, 241, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: currentWorkspace === 'personal' ? '#818cf8' : '#10b981'
+              }}>
+                {currentWorkspace === 'personal' ? <Home size={22} /> : <Building2 size={22} />}
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-primary)' }}>
+                  {currentWorkspace === 'personal' ? 'Línea Personal & Familia' : 'Línea Consultorio Odontológico Belgrano'}
+                </h3>
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: '700',
+                  color: isCurrentConnected ? '#10b981' : '#f59e0b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  marginTop: '2px'
+                }}>
+                  <span style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    backgroundColor: isCurrentConnected ? '#10b981' : '#f59e0b'
+                  }} />
+                  {isCurrentConnected ? '🟢 Conectado 24/7 en la Nube' : '🟡 Pendiente de Vinculación Oficial'}
+                </span>
+              </div>
+            </div>
+
+            {/* Body */}
+            {currentWorkspace === 'personal' ? (
+              isPersonalConnected ? (
+                <div style={{
+                  backgroundColor: 'var(--bg-primary)',
+                  padding: '1rem',
+                  borderRadius: '10px',
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.5rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Número Vinculado:</span>
+                    <strong style={{ color: '#10b981' }}>{zernioConfig?.partnerPhoneNumber || 'Vinculado'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Organizador Inteligente:</span>
+                    <strong style={{ color: '#818cf8' }}>✓ Monitoreando grupos escolares</strong>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: '1rem' }}>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4' }}>
+                    Para que el <strong>Organizador Inteligente</strong> detecte las compras (flautas, útiles), tareas y cumpleaños automáticamente, escanea este código con el celular de tu compañera:
+                  </p>
+
+                  {partnerAuthUrl ? (
+                    <div style={{
+                      backgroundColor: '#ffffff',
+                      padding: '12px',
+                      borderRadius: '12px',
+                      display: 'inline-block',
+                      boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
+                    }}>
+                      <QRCode value={partnerAuthUrl} size={170} />
+                    </div>
+                  ) : (
+                    <div style={{ padding: '1rem', color: '#818cf8', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {loadingPartnerQr ? (
+                        <>
+                          <RefreshCw size={16} className="spin" /> Generando código QR oficial de Meta...
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => fetchPartnerAuthUrl()}
+                          style={{
+                            padding: '0.6rem 1.2rem',
+                            backgroundColor: '#6366f1',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontWeight: '600',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          ⚡ Generar Código QR
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {partnerAuthUrl && (
+                    <div style={{ display: 'flex', gap: '0.5rem', width: '100%', flexWrap: 'wrap' }}>
+                      <a
+                        href={partnerAuthUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          flex: 1,
+                          minWidth: '150px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.4rem',
+                          padding: '0.6rem',
+                          backgroundColor: '#6366f1',
+                          color: 'white',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          textDecoration: 'none'
+                        }}
+                      >
+                        <ExternalLink size={14} /> Abrir en este navegador
+                      </a>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(partnerAuthUrl);
+                          setCopiedPartnerLink(true);
+                          setTimeout(() => setCopiedPartnerLink(false), 3000);
+                        }}
+                        style={{
+                          flex: 1,
+                          minWidth: '150px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.4rem',
+                          padding: '0.6rem',
+                          backgroundColor: copiedPartnerLink ? '#10b981' : 'var(--bg-primary)',
+                          color: copiedPartnerLink ? 'white' : 'var(--text-primary)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {copiedPartnerLink ? <Check size={14} /> : <Copy size={14} />}
+                        {copiedPartnerLink ? '¡Enlace copiado!' : 'Copiar enlace'}
+                      </button>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleCheckConnection}
+                    disabled={checkingConnection}
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem',
+                      backgroundColor: 'var(--bg-primary)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.5rem'
+                    }}
+                  >
+                    <RefreshCw size={15} className={checkingConnection ? 'spin' : ''} />
+                    {checkingConnection ? 'Verificando con Zernio...' : '🔄 Ya lo vinculé / Comprobar Conexión'}
+                  </button>
+                </div>
+              )
+            ) : (
+              <div style={{
+                backgroundColor: 'var(--bg-primary)',
+                padding: '1rem',
+                borderRadius: '10px',
+                fontSize: '0.85rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Línea WhatsApp COB:</span>
+                  <strong style={{ color: '#10b981' }}>+54 9 11 2616-3119</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Estado Meta Cloud:</span>
+                  <span style={{ color: '#10b981', fontWeight: 'bold' }}>✓ Conectado 24/7</span>
+                </div>
+              </div>
+            )}
+
+            {/* Footer Actions */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
+              <button
+                onClick={() => {
+                  setShowConnectionModal(false);
+                  setActiveTab('channels');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#818cf8',
+                  fontSize: '0.85rem',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                <Radio size={14} /> Administrar en Canales
+              </button>
+
+              <button
+                onClick={() => setShowConnectionModal(false)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.85rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
