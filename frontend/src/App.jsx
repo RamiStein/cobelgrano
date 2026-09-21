@@ -180,7 +180,14 @@ function App() {
   };
 
   if (!isAuthenticated) {
-    return <Login onAuthenticated={() => setIsAuthenticated(true)} />;
+    return <Login onAuthenticated={(ws) => {
+      if (ws) {
+        setCurrentWorkspace(ws);
+        localStorage.setItem('cob_crm_workspace', ws);
+        setActiveTab(ws === 'personal' ? 'organizer' : 'dashboard');
+      }
+      setIsAuthenticated(true);
+    }} />;
   }
 
   // Estado de conexión según el espacio activo
