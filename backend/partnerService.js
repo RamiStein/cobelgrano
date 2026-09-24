@@ -478,20 +478,21 @@ async function initPartnerService() {
             );
             const pendingSnap = await getDocs(pendingQuery);
             let recovered = 0;
-            for (const docSnap of pendingSnap.docs) {
+            for (const docSnap of pendingSnap.docs.slice(0, 10)) {
                 const data = docSnap.data();
                 if (!data.mediaUrl && data.id) {
                     try {
                         const msgObj = await client.getMessageById(data.id);
                         if (msgObj && msgObj.hasMedia) {
-                            downloadAndProcessAudio(msgObj, data.id, data.contactName, data.senderName, data.author);
+                            await downloadAndProcessAudio(msgObj, data.id, data.contactName, data.senderName, data.author);
                             recovered++;
+                            await new Promise(r => setTimeout(r, 2000));
                         }
                     } catch (e) {}
                 }
             }
             if (recovered > 0) {
-                console.log(`[Partner Audio Recovery] ${recovered} audios puestos en cola de descarga.`);
+                console.log(`[Partner Audio Recovery] ${recovered} audios recientes procesados.`);
             }
         } catch (e) {
             console.error('[Partner Audio Recovery] Error:', e.message);
