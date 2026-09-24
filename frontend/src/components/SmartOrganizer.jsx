@@ -3,102 +3,116 @@ import {
   Sparkles, CheckCircle2, Circle, Clock, Tag, MessageSquare, 
   Trash2, Plus, Search, Filter, AlertCircle, Calendar, ShoppingBag, 
   GraduationCap, Gift, Users, ExternalLink, Check, ChevronRight, X, Share2,
-  QrCode as QrIcon, ArrowRight
+  QrCode as QrIcon, ArrowRight, Settings, SlidersHorizontal, LayoutGrid, List,
+  Package, CheckCheck, RefreshCw
 } from 'lucide-react';
 import { db } from '../firebase';
 import { 
   collection, query, where, onSnapshot, doc, 
   updateDoc, deleteDoc, addDoc, orderBy 
 } from 'firebase/firestore';
+import CategoryManagerModal, { DEFAULT_TEMPLATES } from './CategoryManagerModal';
+import ChatExtractionRulesModal from './ChatExtractionRulesModal';
+import OrderSummaryModal, { detectIntent, detectProductItem } from './OrderSummaryModal';
 
-const CATEGORIES = {
-  all: { id: 'all', label: 'Todos', icon: Sparkles, color: '#6366f1', bg: 'rgba(99, 102, 241, 0.1)' },
-  colegio: { id: 'colegio', label: 'Colegio & Niños', icon: GraduationCap, color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.12)' },
-  cumpleanos: { id: 'cumpleanos', label: 'Cumpleaños & Festejos', icon: Gift, color: '#ec4899', bg: 'rgba(236, 72, 153, 0.12)' },
-  compras: { id: 'compras', label: 'Compras & Encargos', icon: ShoppingBag, color: '#10b981', bg: 'rgba(16, 185, 129, 0.12)' },
-  compromisos: { id: 'compromisos', label: 'Compromisos / Familia', icon: Calendar, color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)' },
-};
+// Limpieza de títulos redundantes (quita 'frutas (palta): ' etc.)
+function cleanNoteTitle(title = '') {
+  let clean = title.replace(/^[\s📌]*[A-Za-z0-9_\sáéíóúñÁÉÍÓÚÑ]+\s*(\([^)]+\))?\s*:\s*/i, '').trim();
+  return clean || title;
+}
+
+// Extrae palabra clave / sub-producto
+function extractSubKeyword(title = '', originalText = '') {
+  const match = title.match(/\(([^)]+)\)/);
+  if (match && match[1]) {
+    const word = match[1].trim();
+    if (!['vendo', 'compro', 'quiero', 'doy', 'intercambio'].includes(word.toLowerCase())) {
+      return word;
+    }
+  }
+  const prod = detectProductItem(originalText || title);
+  if (prod.label !== 'Otros Encargos') {
+    return prod.label;
+  }
+  return null;
+}
 
 export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPartnerConnected, resetKey }) {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedSource, setSelectedSource] = useState('all');
+  const [selectedIntent, setSelectedIntent] = useState('all'); // 'all', 'pedido', 'consulta', 'aviso', 'oferta'
+  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('pending'); // 'all', 'pending', 'completed'
+  const [statusFilter, setStatusFilter] = useState('pending'); // 'pending', 'completed', 'all'
+  
+  // Modales
   const [showAddModal, setShowAddModal] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [showChatRulesModal, setShowChatRulesModal] = useState(false);
+  const [showOrderModal, setShowOrderModal] = useState(false);
 
-  // Al hacer clic en la estrellita desde el menú lateral, restablecer filtros a "Todos"
+  const [customCategories, setCustomCategories] = useState([]);
+  const [copied, setCopied] = useState(false);
+  const [expandedNotes, setExpandedNotes] = useState(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  const toggleExpandNote = (noteId) => {
+    setExpandedNotes(prev => {
+      const next = new Set(prev);
+      if (next.has(noteId)) {
+        next.delete(noteId);
+      } else {
+        next.add(noteId);
+      }
+      return next;
+    });
+  };
+
+  // Escuchar categorías dinámicas desde Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'custom_categories'), (snapshot) => {
+      const list = [];
+      snapshot.forEach(docSnap => {
+        const d = docSnap.data();
+        list.push({ id: docSnap.id, ...d });
+      });
+      setCustomCategories(list);
+    }, (err) => {
+      console.warn('[SmartOrganizer] Aviso leyendo custom_categories:', err.message);
+    });
+    return () => unsub();
+  }, []);
+
+  // Categorías activas
+  const activeCategories = customCategories.length > 0
+    ? customCategories
+    : DEFAULT_TEMPLATES.personal.categories;
+
+  const categoriesMap = {};
+  activeCategories.forEach(c => {
+    categoriesMap[c.id] = {
+      ...c,
+      label: c.label || c.name || c.id,
+      emoji: c.emoji || '📌',
+      color: c.color || '#6366f1',
+      bg: `${c.color || '#6366f1'}20`
+    };
+  });
+
+  // Reset al hacer clic desde el sidebar
   useEffect(() => {
     if (resetKey) {
       setSelectedCategory('all');
+      setSelectedSource('all');
+      setSelectedIntent('all');
       setStatusFilter('pending');
       setSearchQuery('');
     }
   }, [resetKey]);
 
-  const handleCopySummary = () => {
-    const pendings = notes.filter(n => n.status !== 'completado');
-    if (pendings.length === 0) {
-      alert('No hay tareas pendientes en este momento.');
-      return;
-    }
-
-    let text = '📋 *RESUMEN DE PENDIENTES - FAMILIA*\n\n';
-
-    const colegio = pendings.filter(n => n.category === 'colegio');
-    if (colegio.length > 0) {
-      text += '🎒 *COLEGIO & NIÑOS:*\n';
-      colegio.forEach(c => {
-        text += `▫️ *${c.title}*\n   _Grupo/Origen:_ ${c.sourceName}\n   "${c.originalText.slice(0, 100)}"\n`;
-      });
-      text += '\n';
-    }
-
-    const cumple = pendings.filter(n => n.category === 'cumpleanos');
-    if (cumple.length > 0) {
-      text += '🎂 *CUMPLEAÑOS & FESTEJOS:*\n';
-      cumple.forEach(c => {
-        text += `▫️ *${c.title}*\n   "${c.originalText.slice(0, 100)}"\n`;
-      });
-      text += '\n';
-    }
-
-    const compras = pendings.filter(n => n.category === 'compras');
-    if (compras.length > 0) {
-      text += '🛒 *COMPRAS & ENCARGOS:*\n';
-      compras.forEach(c => {
-        text += `▫️ *${c.title}*\n`;
-      });
-      text += '\n';
-    }
-
-    const compromisos = pendings.filter(n => n.category === 'compromisos');
-    if (compromisos.length > 0) {
-      text += '📅 *COMPROMISOS / FAMILIA:*\n';
-      compromisos.forEach(c => {
-        text += `▫️ *${c.title}*\n`;
-      });
-      text += '\n';
-    }
-
-    text += '✨ _Organizado automáticamente por el CRM Inteligente_';
-
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 3000);
-  };
-
-  // Formulario de nueva nota manual
-  const [newNote, setNewNote] = useState({
-    title: '',
-    category: 'colegio',
-    originalText: '',
-    sourceName: 'Nota manual',
-    senderName: 'Yo',
-    priority: 'media'
-  });
-
+  // Leer notas de Firestore
   useEffect(() => {
     setLoading(true);
     const q = query(
@@ -111,7 +125,6 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
       snapshot.forEach(docSnap => {
         list.push({ id: docSnap.id, ...docSnap.data() });
       });
-      // Sort chronologically in memory (newest first)
       list.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
       setNotes(list);
       setLoading(false);
@@ -136,7 +149,7 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
   };
 
   const handleDelete = async (noteId) => {
-    if (confirm('¿Eliminar esta nota del organizador?')) {
+    if (confirm('¿Eliminar este registro del organizador?')) {
       try {
         await deleteDoc(doc(db, 'smart_notes', noteId));
       } catch (err) {
@@ -144,6 +157,16 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
       }
     }
   };
+
+  // Formulario manual
+  const [newNote, setNewNote] = useState({
+    title: '',
+    category: activeCategories[0]?.id || 'compras',
+    originalText: '',
+    sourceName: 'Nota manual',
+    senderName: 'Yo',
+    priority: 'media'
+  });
 
   const handleCreateManualNote = async (e) => {
     e.preventDefault();
@@ -160,6 +183,7 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
         chatId: '',
         status: 'pendiente',
         priority: newNote.priority || 'media',
+        intent: 'general',
         timestamp: Math.floor(Date.now() / 1000),
         createdAt: Date.now()
       });
@@ -167,7 +191,7 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
       setShowAddModal(false);
       setNewNote({
         title: '',
-        category: 'colegio',
+        category: activeCategories[0]?.id || 'compras',
         originalText: '',
         sourceName: 'Nota manual',
         senderName: 'Yo',
@@ -178,17 +202,56 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
     }
   };
 
-  // Filtrado de notas
-  const filteredNotes = notes.filter(n => {
-    // Filtro por categoría
-    if (selectedCategory !== 'all' && n.category !== selectedCategory) {
-      return false;
+  // Copiar resumen de WhatsApp
+  const handleCopySummary = () => {
+    const pendings = notes.filter(n => n.status !== 'completado');
+    if (pendings.length === 0) {
+      alert('No hay tareas pendientes en este momento.');
+      return;
     }
-    // Filtro por estado
+
+    let text = '📋 *RESUMEN DE PENDIENTES - ORGANIZADOR*\n\n';
+
+    activeCategories.forEach(cat => {
+      const items = pendings.filter(n => n.category === cat.id);
+      if (items.length > 0) {
+        text += `${cat.emoji || '📌'} *${(cat.label || cat.name || cat.id).toUpperCase()}:*\n`;
+        items.forEach(c => {
+          text += `▫️ *${cleanNoteTitle(c.title)}*\n   _Origen:_ ${c.sourceName}\n   "${(c.originalText || '').slice(0, 90)}"\n`;
+        });
+        text += '\n';
+      }
+    });
+
+    text += '✨ _Organizado automáticamente por el CRM Inteligente_';
+
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 3000);
+  };
+
+  // Grupos u orígenes únicos presentes en las notas
+  const uniqueSources = Array.from(new Set(notes.map(n => n.sourceName).filter(Boolean))).sort();
+
+  // Filtrado multidimensional
+  const filteredNotes = notes.filter(n => {
+    // 1. Categoría
+    if (selectedCategory !== 'all' && n.category !== selectedCategory) return false;
+
+    // 2. Estado
     if (statusFilter === 'pending' && n.status === 'completado') return false;
     if (statusFilter === 'completed' && n.status !== 'completado') return false;
 
-    // Filtro por búsqueda
+    // 3. Grupo / Origen
+    if (selectedSource !== 'all' && n.sourceName !== selectedSource) return false;
+
+    // 4. Intención
+    if (selectedIntent !== 'all') {
+      const intentType = n.intent || detectIntent(n.originalText || n.title).type;
+      if (intentType !== selectedIntent) return false;
+    }
+
+    // 5. Búsqueda por texto
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const titleMatch = (n.title || '').toLowerCase().includes(q);
@@ -204,10 +267,11 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
   // Métricas
   const totalNotes = notes.length;
   const pendingNotes = notes.filter(n => n.status !== 'completado').length;
-  const colegioCount = notes.filter(n => n.category === 'colegio' && n.status !== 'completado').length;
-  const cumpleCount = notes.filter(n => n.category === 'cumpleanos' && n.status !== 'completado').length;
-  const comprasCount = notes.filter(n => n.category === 'compras' && n.status !== 'completado').length;
-  const compromisosCount = notes.filter(n => n.category === 'compromisos' && n.status !== 'completado').length;
+  const completedNotes = notes.filter(n => n.status === 'completado').length;
+
+  const ordersCount = notes.filter(n => n.status !== 'completado' && (n.intent === 'pedido' || detectIntent(n.originalText || n.title).type === 'pedido')).length;
+  const queriesCount = notes.filter(n => n.status !== 'completado' && (n.intent === 'consulta' || detectIntent(n.originalText || n.title).type === 'consulta')).length;
+  const avisosCount = notes.filter(n => n.status !== 'completado' && (n.intent === 'aviso' || detectIntent(n.originalText || n.title).type === 'aviso')).length;
 
   const formatDate = (timestamp) => {
     if (!timestamp) return '';
@@ -220,18 +284,19 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', backgroundColor: 'var(--bg-primary)' }}>
       {/* Header */}
       <div style={{
-        padding: '1.5rem 2rem',
+        padding: '1.25rem 2rem',
         borderBottom: '1px solid var(--border)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: '1rem'
+        gap: '1rem',
+        backgroundColor: 'var(--bg-secondary)'
       }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <span style={{ fontSize: '1.6rem' }}>🧠</span>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
+            <span style={{ fontSize: '1.5rem' }}>🧠</span>
+            <h1 style={{ fontSize: '1.4rem', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>
               Organizador Inteligente
             </h1>
             <span style={{
@@ -246,92 +311,157 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
               ESPACIO PERSONAL
             </span>
           </div>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.3rem 0 0 0' }}>
-            Extracción y categorización automática de grupos de WhatsApp (escuela, festejos, compras y tareas del hogar).
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', margin: '0.25rem 0 0 0' }}>
+            Extracción y consolidación automática de pedidos, consultas, compras y avisos de tus grupos de WhatsApp.
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+        {/* Action Buttons */}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Botón Consolidar Pedidos */}
           <button
+            type="button"
+            onClick={() => setShowOrderModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              backgroundColor: 'rgba(16, 185, 129, 0.18)',
+              color: '#10b981',
+              border: '1.5px solid #10b981',
+              borderRadius: '8px',
+              padding: '0.55rem 0.95rem',
+              fontSize: '0.82rem',
+              fontWeight: '700',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              boxShadow: '0 2px 8px rgba(16, 185, 129, 0.2)'
+            }}
+          >
+            <ShoppingBag size={15} />
+            Consolidar Pedidos ({ordersCount})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowCategoryModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              backgroundColor: 'var(--bg-primary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.55rem 0.85rem',
+              fontSize: '0.82rem',
+              fontWeight: '600',
+              cursor: 'pointer'
+            }}
+          >
+            <Settings size={15} color="#6366f1" />
+            Personalizar Categorías
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowChatRulesModal(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.45rem',
+              backgroundColor: 'var(--bg-primary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.55rem 0.85rem',
+              fontSize: '0.82rem',
+              fontWeight: '600',
+              cursor: 'pointer'
+            }}
+          >
+            <SlidersHorizontal size={15} color="#10b981" />
+            Reglas de Chats
+          </button>
+
+          <button
+            type="button"
             onClick={handleCopySummary}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
-              backgroundColor: copied ? '#10b981' : 'var(--bg-secondary)',
-              color: copied ? 'white' : 'var(--text-primary)',
+              gap: '0.45rem',
+              backgroundColor: 'var(--bg-primary)',
+              color: 'var(--text-primary)',
               border: '1px solid var(--border)',
               borderRadius: '8px',
-              padding: '0.6rem 1rem',
-              fontSize: '0.85rem',
+              padding: '0.55rem 0.85rem',
+              fontSize: '0.82rem',
               fontWeight: '600',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+              cursor: 'pointer'
             }}
           >
-            {copied ? <Check size={16} /> : <Share2 size={16} />}
-            {copied ? '¡Copiado para WhatsApp!' : 'Copiar para WhatsApp'}
+            {copied ? <Check size={15} color="#10b981" /> : <Share2 size={15} />}
+            {copied ? '¡Copiado!' : 'Copiar Todo'}
           </button>
 
           <button
+            type="button"
             onClick={() => setShowAddModal(true)}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              gap: '0.45rem',
               backgroundColor: '#6366f1',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
-              padding: '0.6rem 1.1rem',
-              fontSize: '0.85rem',
-              fontWeight: '600',
+              padding: '0.55rem 1rem',
+              fontSize: '0.82rem',
+              fontWeight: '700',
               cursor: 'pointer',
-              transition: 'background-color 0.2s',
-              boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)'
+              boxShadow: '0 2px 8px rgba(99, 102, 241, 0.35)'
             }}
           >
-            <Plus size={16} />
-            Agregar Tarea Manual
+            <Plus size={15} />
+            Nueva Tarea
           </button>
         </div>
       </div>
 
-      {/* Banner de Vinculación de WhatsApp si no está conectado */}
+      {/* Banner de Vinculación si no está conectado */}
       {!isPartnerConnected && (
         <div style={{
-          margin: '1.25rem 2rem 0',
-          padding: '1.1rem 1.4rem',
-          backgroundColor: 'rgba(99, 102, 241, 0.12)',
-          border: '1.5px solid #6366f1',
-          borderRadius: '14px',
+          margin: '1rem 2rem 0',
+          padding: '1rem 1.25rem',
+          backgroundColor: 'rgba(99, 102, 241, 0.1)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+          borderRadius: '12px',
           display: 'flex',
-          justifyContent: 'space-between',
           alignItems: 'center',
-          gap: '1rem',
+          justifyContent: 'space-between',
           flexWrap: 'wrap',
-          boxShadow: '0 4px 20px rgba(99, 102, 241, 0.15)'
+          gap: '1rem'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             <div style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
               backgroundColor: '#6366f1',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              flexShrink: 0
+              color: 'white'
             }}>
-              <QrIcon size={24} color="#ffffff" />
+              <QrIcon size={18} />
             </div>
             <div>
-              <strong style={{ fontSize: '1rem', color: '#ffffff', display: 'block' }}>
+              <strong style={{ fontSize: '0.9rem', color: '#e0e7ff', display: 'block' }}>
                 Línea de WhatsApp de tu compañera pendiente de vincular
               </strong>
-              <span style={{ fontSize: '0.82rem', color: '#c7d2fe' }}>
-                Para que el organizador lea automáticamente las tareas, flautas, cumpleaños y grupos de ella, escanea el código QR oficial.
+              <span style={{ fontSize: '0.8rem', color: '#c7d2fe' }}>
+                Para que el organizador lea automáticamente las notas y grupos de ella, escanea el código QR oficial.
               </span>
             </div>
           </div>
@@ -343,353 +473,632 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
               display: 'flex',
               alignItems: 'center',
               gap: '0.5rem',
-              padding: '0.65rem 1.25rem',
+              padding: '0.55rem 1rem',
               backgroundColor: '#6366f1',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
-              fontSize: '0.85rem',
+              fontSize: '0.8rem',
               fontWeight: '700',
-              cursor: 'pointer',
-              transition: 'background 0.2s',
-              boxShadow: '0 2px 10px rgba(99, 102, 241, 0.4)'
+              cursor: 'pointer'
             }}
           >
-            <QrIcon size={16} />
-            Ver Código QR de Vinculación <ArrowRight size={16} />
+            <QrIcon size={14} />
+            Ver Código QR <ArrowRight size={14} />
           </button>
         </div>
       )}
 
-      {/* KPI Cards */}
+      {/* Modern Compact Metrics Bar (Sin espacios negros gigantes) */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-        gap: '1rem',
-        padding: '1.5rem 2rem 0.5rem'
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: '0.75rem',
+        padding: '1rem 2rem 0.25rem'
       }}>
-        {/* Colegio */}
-        <div 
-          onClick={() => setSelectedCategory('colegio')}
+        {/* KPI 1: Pedidos / Encargos detectados */}
+        <div
+          onClick={() => {
+            setSelectedIntent(selectedIntent === 'pedido' ? 'all' : 'pedido');
+            setSelectedCategory('all');
+          }}
           style={{
-            backgroundColor: 'var(--bg-secondary)',
-            border: selectedCategory === 'colegio' ? '1px solid #3b82f6' : '1px solid var(--border)',
-            borderRadius: '12px',
-            padding: '1rem',
+            backgroundColor: selectedIntent === 'pedido' ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-secondary)',
+            border: selectedIntent === 'pedido' ? '1.5px solid #10b981' : '1px solid var(--border)',
+            borderRadius: '10px',
+            padding: '0.65rem 0.9rem',
             cursor: 'pointer',
-            transition: 'all 0.2s'
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            transition: 'all 0.15s',
+            boxShadow: selectedIntent === 'pedido' ? '0 4px 12px rgba(16, 185, 129, 0.2)' : 'none'
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Colegio & Niños</span>
-            <span style={{ fontSize: '1.2rem' }}>🎒</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+            <div style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
+              backgroundColor: 'rgba(16, 185, 129, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.2rem'
+            }}>
+              🛒
+            </div>
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>
+                Pedidos & Reservas
+              </div>
+              <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: '600' }}>
+                {selectedIntent === 'pedido' ? 'Filtro activo' : 'Toca para aislar'}
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: '700', color: '#3b82f6', marginTop: '0.3rem' }}>
-            {colegioCount}
+          <div style={{ fontSize: '1.4rem', fontWeight: '800', color: '#10b981' }}>
+            {ordersCount}
           </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Tareas, flautas y avisos</span>
         </div>
 
-        {/* Cumpleaños */}
-        <div 
-          onClick={() => setSelectedCategory('cumpleanos')}
-          style={{
-            backgroundColor: 'var(--bg-secondary)',
-            border: selectedCategory === 'cumpleanos' ? '1px solid #ec4899' : '1px solid var(--border)',
-            borderRadius: '12px',
-            padding: '1rem',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Cumpleaños</span>
-            <span style={{ fontSize: '1.2rem' }}>🎂</span>
-          </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: '700', color: '#ec4899', marginTop: '0.3rem' }}>
-            {cumpleCount}
-          </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Festejos e invitaciones</span>
-        </div>
-
-        {/* Compras */}
-        <div 
-          onClick={() => setSelectedCategory('compras')}
-          style={{
-            backgroundColor: 'var(--bg-secondary)',
-            border: selectedCategory === 'compras' ? '1px solid #10b981' : '1px solid var(--border)',
-            borderRadius: '12px',
-            padding: '1rem',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Compras & Pendientes</span>
-            <span style={{ fontSize: '1.2rem' }}>🛒</span>
-          </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: '700', color: '#10b981', marginTop: '0.3rem' }}>
-            {comprasCount}
-          </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Farmacia, súper, encargos</span>
-        </div>
-
-        {/* Compromisos */}
-        <div 
-          onClick={() => setSelectedCategory('compromisos')}
-          style={{
-            backgroundColor: 'var(--bg-secondary)',
-            border: selectedCategory === 'compromisos' ? '1px solid #f59e0b' : '1px solid var(--border)',
-            borderRadius: '12px',
-            padding: '1rem',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Familia / Citas</span>
-            <span style={{ fontSize: '1.2rem' }}>📅</span>
-          </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: '700', color: '#f59e0b', marginTop: '0.3rem' }}>
-            {compromisosCount}
-          </div>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Médicos y compromisos</span>
-        </div>
+        {/* Categorías dinámicas */}
+        {activeCategories.map(cat => {
+          const count = notes.filter(n => n.category === cat.id && n.status !== 'completado').length;
+          const isSelected = selectedCategory === cat.id && selectedIntent === 'all';
+          return (
+            <div 
+              key={cat.id}
+              onClick={() => {
+                setSelectedCategory(isSelected ? 'all' : cat.id);
+                setSelectedIntent('all');
+              }}
+              style={{
+                backgroundColor: isSelected ? `${cat.color || '#6366f1'}18` : 'var(--bg-secondary)',
+                border: isSelected ? `1.5px solid ${cat.color || '#6366f1'}` : '1px solid var(--border)',
+                borderRadius: '10px',
+                padding: '0.65rem 0.9rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                transition: 'all 0.15s',
+                boxShadow: isSelected ? `0 4px 12px ${cat.color || '#6366f1'}30` : 'none'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <div style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '8px',
+                  backgroundColor: `${cat.color || '#6366f1'}20`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.2rem'
+                }}>
+                  {cat.emoji || '📌'}
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>
+                    {cat.label || cat.name}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                    {count === 1 ? '1 pendiente' : `${count} pendientes`}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '1.4rem', fontWeight: '800', color: cat.color || '#6366f1' }}>
+                {count}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      {/* Filters and Search Bar */}
+      {/* Advanced Command & Filter Bar */}
       <div style={{
-        padding: '1rem 2rem',
+        padding: '0.75rem 2rem 0.5rem',
         display: 'flex',
-        flexWrap: 'wrap',
-        gap: '0.75rem',
-        alignItems: 'center',
-        justifyContent: 'space-between'
+        flexDirection: 'column',
+        gap: '0.6rem'
       }}>
-        {/* Category Tabs */}
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          {Object.entries(CATEGORIES).map(([key, cat]) => {
-            const Icon = cat.icon;
-            const isSelected = selectedCategory === key;
+        {/* Row 1: Category Chips & Intent Chips */}
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Todas las categorías */}
+          <button
+            onClick={() => { setSelectedCategory('all'); setSelectedIntent('all'); }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              padding: '0.35rem 0.75rem',
+              borderRadius: '7px',
+              border: selectedCategory === 'all' && selectedIntent === 'all' ? '1.5px solid #6366f1' : '1px solid var(--border)',
+              backgroundColor: selectedCategory === 'all' && selectedIntent === 'all' ? 'rgba(99, 102, 241, 0.18)' : 'var(--bg-secondary)',
+              color: selectedCategory === 'all' && selectedIntent === 'all' ? '#818cf8' : 'var(--text-secondary)',
+              fontSize: '0.78rem',
+              fontWeight: selectedCategory === 'all' && selectedIntent === 'all' ? '700' : '500',
+              cursor: 'pointer'
+            }}
+          >
+            <Sparkles size={13} />
+            Todas las categorías ({pendingNotes})
+          </button>
+
+          {activeCategories.map(cat => {
+            const isSelected = selectedCategory === cat.id && selectedIntent === 'all';
+            const count = notes.filter(n => n.category === cat.id && n.status !== 'completado').length;
             return (
               <button
-                key={key}
-                onClick={() => setSelectedCategory(key)}
+                key={cat.id}
+                onClick={() => { setSelectedCategory(cat.id); setSelectedIntent('all'); }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.45rem 0.8rem',
-                  borderRadius: '8px',
-                  border: isSelected ? `1px solid ${cat.color}` : '1px solid var(--border)',
-                  backgroundColor: isSelected ? cat.bg : 'var(--bg-secondary)',
-                  color: isSelected ? cat.color : 'var(--text-secondary)',
-                  fontSize: '0.8rem',
-                  fontWeight: isSelected ? '600' : '500',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s'
+                  gap: '0.35rem',
+                  padding: '0.35rem 0.7rem',
+                  borderRadius: '7px',
+                  border: isSelected ? `1.5px solid ${cat.color || '#6366f1'}` : '1px solid var(--border)',
+                  backgroundColor: isSelected ? `${cat.color || '#6366f1'}20` : 'var(--bg-secondary)',
+                  color: isSelected ? (cat.color || '#6366f1') : 'var(--text-secondary)',
+                  fontSize: '0.78rem',
+                  fontWeight: isSelected ? '700' : '500',
+                  cursor: 'pointer'
                 }}
               >
-                <Icon size={14} />
-                {cat.label}
+                <span>{cat.emoji || '📌'}</span>
+                {cat.label || cat.name} ({count})
               </button>
             );
           })}
+
+          <div style={{ width: '1px', height: '22px', backgroundColor: 'var(--border)', margin: '0 0.3rem' }} />
+
+          {/* Filtros por Intención */}
+          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', fontWeight: '600' }}>
+            Tipo:
+          </span>
+
+          <button
+            onClick={() => setSelectedIntent(selectedIntent === 'pedido' ? 'all' : 'pedido')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+              padding: '0.35rem 0.65rem',
+              borderRadius: '7px',
+              border: selectedIntent === 'pedido' ? '1.5px solid #10b981' : '1px solid var(--border)',
+              backgroundColor: selectedIntent === 'pedido' ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-secondary)',
+              color: selectedIntent === 'pedido' ? '#10b981' : 'var(--text-secondary)',
+              fontSize: '0.75rem',
+              fontWeight: selectedIntent === 'pedido' ? '700' : '500',
+              cursor: 'pointer'
+            }}
+          >
+            🛒 Pedidos ({ordersCount})
+          </button>
+
+          <button
+            onClick={() => setSelectedIntent(selectedIntent === 'consulta' ? 'all' : 'consulta')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+              padding: '0.35rem 0.65rem',
+              borderRadius: '7px',
+              border: selectedIntent === 'consulta' ? '1.5px solid #0ea5e9' : '1px solid var(--border)',
+              backgroundColor: selectedIntent === 'consulta' ? 'rgba(14, 165, 233, 0.2)' : 'var(--bg-secondary)',
+              color: selectedIntent === 'consulta' ? '#0ea5e9' : 'var(--text-secondary)',
+              fontSize: '0.75rem',
+              fontWeight: selectedIntent === 'consulta' ? '700' : '500',
+              cursor: 'pointer'
+            }}
+          >
+            ❓ Consultas ({queriesCount})
+          </button>
+
+          <button
+            onClick={() => setSelectedIntent(selectedIntent === 'aviso' ? 'all' : 'aviso')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+              padding: '0.35rem 0.65rem',
+              borderRadius: '7px',
+              border: selectedIntent === 'aviso' ? '1.5px solid #f59e0b' : '1px solid var(--border)',
+              backgroundColor: selectedIntent === 'aviso' ? 'rgba(245, 158, 11, 0.2)' : 'var(--bg-secondary)',
+              color: selectedIntent === 'aviso' ? '#f59e0b' : 'var(--text-secondary)',
+              fontSize: '0.75rem',
+              fontWeight: selectedIntent === 'aviso' ? '700' : '500',
+              cursor: 'pointer'
+            }}
+          >
+            📢 Avisos ({avisosCount})
+          </button>
         </div>
 
-        {/* Search & Status Toggle */}
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            borderRadius: '8px',
-            padding: '0.35rem 0.75rem',
-            width: '220px'
-          }}>
-            <Search size={14} style={{ color: 'var(--text-secondary)', marginRight: '0.5rem' }} />
-            <input
-              type="text"
-              placeholder="Buscar tareas, notas..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-primary)',
-                fontSize: '0.8rem',
-                outline: 'none',
-                width: '100%'
-              }}
-            />
+        {/* Row 2: Search, Group Selector, Status & View Mode */}
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '0.6rem',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingTop: '0.3rem'
+        }}>
+          {/* Left Controls: Search + Group Dropdown */}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* Buscador */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.35rem 0.65rem',
+              width: '240px'
+            }}>
+              <Search size={14} style={{ color: 'var(--text-secondary)', marginRight: '0.4rem' }} />
+              <input
+                type="text"
+                placeholder="Buscar cliente, palabra..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                  outline: 'none',
+                  width: '100%'
+                }}
+              />
+              {searchQuery && (
+                <X size={13} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} onClick={() => setSearchQuery('')} />
+              )}
+            </div>
+
+            {/* Selector por Grupo de WhatsApp */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              backgroundColor: 'var(--bg-secondary)',
+              border: selectedSource !== 'all' ? '1px solid #6366f1' : '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.35rem 0.65rem'
+            }}>
+              <Users size={14} style={{ color: selectedSource !== 'all' ? '#818cf8' : 'var(--text-secondary)' }} />
+              <select
+                value={selectedSource}
+                onChange={(e) => setSelectedSource(e.target.value)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: selectedSource !== 'all' ? '#818cf8' : 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                  fontWeight: selectedSource !== 'all' ? '600' : '400',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  maxWidth: '220px'
+                }}
+              >
+                <option value="all" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
+                  Todos los grupos ({uniqueSources.length})
+                </option>
+                {uniqueSources.map(source => {
+                  const count = notes.filter(n => n.sourceName === source && n.status !== 'completado').length;
+                  return (
+                    <option key={source} value={source} style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}>
+                      {source} ({count})
+                    </option>
+                  );
+                })}
+              </select>
+              {selectedSource !== 'all' && (
+                <X size={13} style={{ cursor: 'pointer', color: '#818cf8' }} onClick={() => setSelectedSource('all')} title="Quitar filtro de grupo" />
+              )}
+            </div>
           </div>
 
-          <div style={{
-            display: 'flex',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border)',
-            borderRadius: '8px',
-            padding: '2px'
-          }}>
-            <button
-              onClick={() => setStatusFilter('pending')}
-              style={{
-                padding: '0.3rem 0.6rem',
-                borderRadius: '6px',
-                border: 'none',
-                backgroundColor: statusFilter === 'pending' ? 'var(--border)' : 'transparent',
-                color: statusFilter === 'pending' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: '0.75rem',
-                fontWeight: '600',
-                cursor: 'pointer'
-              }}
-            >
-              Pendientes ({pendingNotes})
-            </button>
-            <button
-              onClick={() => setStatusFilter('completed')}
-              style={{
-                padding: '0.3rem 0.6rem',
-                borderRadius: '6px',
-                border: 'none',
-                backgroundColor: statusFilter === 'completed' ? 'var(--border)' : 'transparent',
-                color: statusFilter === 'completed' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: '0.75rem',
-                fontWeight: '600',
-                cursor: 'pointer'
-              }}
-            >
-              Resueltos
-            </button>
-            <button
-              onClick={() => setStatusFilter('all')}
-              style={{
-                padding: '0.3rem 0.6rem',
-                borderRadius: '6px',
-                border: 'none',
-                backgroundColor: statusFilter === 'all' ? 'var(--border)' : 'transparent',
-                color: statusFilter === 'all' ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: '0.75rem',
-                fontWeight: '600',
-                cursor: 'pointer'
-              }}
-            >
-              Todos ({totalNotes})
-            </button>
+          {/* Right Controls: Status Toggle & View Switch */}
+          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+            {/* Status Toggle (Sin "Todos" duplicado) */}
+            <div style={{
+              display: 'flex',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '2px'
+            }}>
+              <button
+                onClick={() => setStatusFilter('pending')}
+                style={{
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: statusFilter === 'pending' ? 'var(--border)' : 'transparent',
+                  color: statusFilter === 'pending' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  fontSize: '0.75rem',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                Pendientes ({pendingNotes})
+              </button>
+              <button
+                onClick={() => setStatusFilter('completed')}
+                style={{
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: statusFilter === 'completed' ? 'var(--border)' : 'transparent',
+                  color: statusFilter === 'completed' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  fontSize: '0.75rem',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                Resueltos ({completedNotes})
+              </button>
+              <button
+                onClick={() => setStatusFilter('all')}
+                style={{
+                  padding: '0.3rem 0.6rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: statusFilter === 'all' ? 'var(--border)' : 'transparent',
+                  color: statusFilter === 'all' ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  fontSize: '0.75rem',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                Historial ({totalNotes})
+              </button>
+            </div>
+
+            {/* View Mode Toggle: Grid vs List */}
+            <div style={{
+              display: 'flex',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '2px'
+            }}>
+              <button
+                onClick={() => setViewMode('grid')}
+                title="Vista en Tarjetas"
+                style={{
+                  padding: '0.3rem 0.55rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: viewMode === 'grid' ? '#6366f1' : 'transparent',
+                  color: viewMode === 'grid' ? 'white' : 'var(--text-secondary)',
+                  fontSize: '0.75rem',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}
+              >
+                <LayoutGrid size={14} /> Tarjetas
+              </button>
+              <button
+                onClick={() => setViewMode('list')}
+                title="Vista en Lista Compacta (alta velocidad)"
+                style={{
+                  padding: '0.3rem 0.55rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: viewMode === 'list' ? '#6366f1' : 'transparent',
+                  color: viewMode === 'list' ? 'white' : 'var(--text-secondary)',
+                  fontSize: '0.75rem',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem'
+                }}
+              >
+                <List size={14} /> Lista
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Note Cards List */}
-      <div style={{
-        padding: '0.5rem 2rem 2rem',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
-        gap: '1rem'
-      }}>
-        {loading ? (
-          <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>
-            Cargando organizador inteligente...
-          </div>
-        ) : filteredNotes.length === 0 ? (
-          <div style={{
-            gridColumn: '1 / -1',
-            textAlign: 'center',
-            padding: '3rem',
-            backgroundColor: 'var(--bg-secondary)',
-            borderRadius: '12px',
-            border: '1px dashed var(--border)'
-          }}>
-            <Sparkles size={40} style={{ color: '#6366f1', opacity: 0.6, marginBottom: '0.8rem' }} />
-            <h3 style={{ fontSize: '1.1rem', marginBottom: '0.3rem' }}>No hay notas pendientes en este filtro</h3>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '400px', margin: '0 auto' }}>
-              Los mensajes entrantes de los grupos escolares o de tu compañera sobre tareas, flautas, compras o cumpleaños aparecerán aquí automáticamente.
-            </p>
-          </div>
-        ) : (
-          filteredNotes.map(note => {
-            const cat = CATEGORIES[note.category] || CATEGORIES.colegio;
-            const CatIcon = cat.icon;
+      {/* Main Content Area: Grid View vs Compact List View */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
+          <RefreshCw size={24} className="spin" style={{ marginBottom: '0.5rem' }} />
+          <div>Cargando organizador inteligente...</div>
+        </div>
+      ) : filteredNotes.length === 0 ? (
+        <div style={{
+          margin: '1rem 2rem 2rem',
+          textAlign: 'center',
+          padding: '3.5rem 1rem',
+          backgroundColor: 'var(--bg-secondary)',
+          borderRadius: '12px',
+          border: '1px dashed var(--border)'
+        }}>
+          <Sparkles size={40} style={{ color: '#6366f1', opacity: 0.6, marginBottom: '0.8rem' }} />
+          <h3 style={{ fontSize: '1.1rem', marginBottom: '0.3rem', color: 'var(--text-primary)' }}>
+            No hay notas con este criterio
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '420px', margin: '0 auto' }}>
+            Prueba cambiando los filtros de categoría, grupo o estado, o usa el buscador para localizar un mensaje.
+          </p>
+        </div>
+      ) : viewMode === 'grid' ? (
+        /* VISTA 1: GRID EN TARJETAS (LIMPIAS Y SIN REDUNDANCIA) */
+        <div style={{
+          padding: '0.5rem 2rem 2.5rem',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+          gap: '1rem'
+        }}>
+          {filteredNotes.map(note => {
+            const cat = categoriesMap[note.category] || {
+              label: note.category,
+              emoji: '📌',
+              color: '#6366f1',
+              bg: 'rgba(99, 102, 241, 0.12)'
+            };
             const isCompleted = note.status === 'completado';
+            const intent = detectIntent(note.originalText || note.title);
+            const subKeyword = extractSubKeyword(note.title, note.originalText);
+            const cleanTitle = cleanNoteTitle(note.title);
+
+            const isVeryLong = (note.originalText || '').length > 170 || (note.originalText || '').split('\n').length > 3;
+            const isExpanded = expandedNotes.has(note.id);
 
             return (
               <div
                 key={note.id}
                 style={{
                   backgroundColor: 'var(--bg-secondary)',
-                  border: isCompleted ? '1px solid var(--border)' : `1px solid ${cat.color}40`,
+                  border: isCompleted ? '1px solid var(--border)' : `1px solid ${cat.color}45`,
                   borderRadius: '12px',
-                  padding: '1.2rem',
+                  padding: '1.1rem',
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  boxShadow: isCompleted ? 'none' : '0 2px 8px rgba(0,0,0,0.08)',
-                  opacity: isCompleted ? 0.65 : 1,
+                  boxShadow: isCompleted ? 'none' : '0 2px 8px rgba(0,0,0,0.06)',
+                  opacity: isCompleted ? 0.6 : 1,
                   transition: 'all 0.2s',
                   position: 'relative'
                 }}
               >
                 <div>
-                  {/* Card Header: Category & Priority */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.35rem',
-                      fontSize: '0.75rem',
-                      fontWeight: '700',
-                      padding: '2px 8px',
-                      borderRadius: '6px',
-                      backgroundColor: cat.bg,
-                      color: cat.color
-                    }}>
-                      <CatIcon size={12} />
-                      {cat.label}
-                    </span>
+                  {/* Card Header: Category + Subkeyword + Intent Badge + Date */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      {/* Categoría */}
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        fontSize: '0.72rem',
+                        fontWeight: '700',
+                        padding: '2px 7px',
+                        borderRadius: '5px',
+                        backgroundColor: cat.bg || `${cat.color}20`,
+                        color: cat.color
+                      }}>
+                        <span>{cat.emoji || '📌'}</span>
+                        {cat.label || cat.name}
+                      </span>
 
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      {/* Sub-producto / Palabra Clave */}
+                      {subKeyword && (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.2rem',
+                          fontSize: '0.7rem',
+                          fontWeight: '600',
+                          padding: '1px 6px',
+                          borderRadius: '5px',
+                          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                          color: 'var(--text-primary)'
+                        }}>
+                          {subKeyword}
+                        </span>
+                      )}
+
+                      {/* Badge de Intención */}
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: '700',
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        backgroundColor: intent.bg,
+                        color: intent.color
+                      }}>
+                        {intent.emoji} {intent.label}
+                      </span>
+                    </div>
+
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
                       {formatDate(note.timestamp)}
                     </span>
                   </div>
 
-                  {/* Title */}
+                  {/* Clean Title (Sin prefijos repetitivos) */}
                   <h3 style={{
-                    fontSize: '1.05rem',
+                    fontSize: '0.96rem',
                     fontWeight: '600',
                     color: isCompleted ? 'var(--text-secondary)' : 'var(--text-primary)',
                     textDecoration: isCompleted ? 'line-through' : 'none',
-                    margin: '0 0 0.6rem 0',
-                    lineHeight: '1.35'
-                  }}>
-                    {note.title}
+                    margin: '0 0 0.55rem 0',
+                    lineHeight: '1.35',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    wordBreak: 'break-word'
+                  }} title={note.title}>
+                    {cleanTitle}
                   </h3>
 
-                  {/* Original text snippet / quote */}
+                  {/* Original text snippet con lector colapsable */}
                   <div style={{
                     fontSize: '0.8rem',
                     color: 'var(--text-secondary)',
                     backgroundColor: 'rgba(0, 0, 0, 0.12)',
-                    padding: '0.6rem 0.8rem',
+                    padding: '0.55rem 0.75rem',
                     borderRadius: '6px',
                     borderLeft: `3px solid ${cat.color}`,
-                    marginBottom: '0.8rem',
+                    marginBottom: '0.75rem',
                     fontStyle: 'italic',
                     wordBreak: 'break-word',
-                    lineHeight: '1.4'
+                    lineHeight: '1.45',
+                    position: 'relative'
                   }}>
-                    "{note.originalText}"
+                    <div style={{
+                      maxHeight: isExpanded ? 'none' : (isVeryLong ? '80px' : 'none'),
+                      overflow: 'hidden',
+                      whiteSpace: 'pre-wrap',
+                      transition: 'max-height 0.25s ease'
+                    }}>
+                      "{note.originalText}"
+                    </div>
+
+                    {isVeryLong && (
+                      <div style={{ marginTop: '0.35rem', textAlign: 'right' }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandNote(note.id)}
+                          style={{
+                            background: 'rgba(99, 102, 241, 0.1)',
+                            border: '1px solid rgba(99, 102, 241, 0.3)',
+                            borderRadius: '4px',
+                            color: '#818cf8',
+                            fontSize: '0.7rem',
+                            fontWeight: '600',
+                            padding: '1px 6px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {isExpanded ? '▲ Ver menos' : '▼ Ver mensaje completo'}
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Origin & Sender */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.74rem', color: 'var(--text-secondary)', marginBottom: '0.65rem' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', backgroundColor: 'var(--border)', padding: '2px 6px', borderRadius: '4px' }}>
                       <Users size={11} />
                       {note.sourceName}
                     </span>
                     {note.senderName && note.senderName !== note.sourceName && (
-                      <span style={{ opacity: 0.8 }}>
-                        Por: <strong>{note.senderName}</strong>
+                      <span style={{ opacity: 0.85 }}>
+                        Por: <strong style={{ color: 'var(--text-primary)' }}>{note.senderName}</strong>
                       </span>
                     )}
                   </div>
@@ -700,16 +1109,16 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  paddingTop: '0.75rem',
+                  paddingTop: '0.65rem',
                   borderTop: '1px solid var(--border)',
-                  marginTop: '0.5rem'
+                  marginTop: '0.4rem'
                 }}>
                   <button
                     onClick={() => handleToggleStatus(note)}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '0.4rem',
+                      gap: '0.35rem',
                       padding: '0.35rem 0.75rem',
                       borderRadius: '6px',
                       border: isCompleted ? '1px solid var(--border)' : '1px solid #10b981',
@@ -720,25 +1129,29 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                       cursor: 'pointer'
                     }}
                   >
-                    {isCompleted ? <Circle size={14} /> : <Check size={14} />}
-                    {isCompleted ? 'Marcar pendiente' : 'Marcar resuelto'}
+                    {isCompleted ? <Circle size={13} /> : <Check size={13} />}
+                    {isCompleted ? 'Pendiente' : 'Marcar resuelto'}
                   </button>
 
-                  <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
                     {note.chatId && onOpenChat && (
                       <button
                         onClick={() => onOpenChat(note.chatId)}
-                        title="Abrir conversación original"
+                        title="Abrir conversación en WhatsApp"
                         style={{
                           background: 'none',
-                          border: 'none',
+                          border: '1px solid var(--border)',
                           color: 'var(--accent)',
-                          padding: '0.35rem',
+                          padding: '0.35rem 0.55rem',
+                          borderRadius: '6px',
                           cursor: 'pointer',
-                          borderRadius: '4px'
+                          fontSize: '0.75rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem'
                         }}
                       >
-                        <ExternalLink size={16} />
+                        <ExternalLink size={13} /> Chat
                       </button>
                     )}
                     <button
@@ -752,20 +1165,239 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                         cursor: 'pointer',
                         borderRadius: '4px'
                       }}
-                      onMouseEnter={(e) => e.target.style.color = '#ef4444'}
-                      onMouseLeave={(e) => e.target.style.color = 'var(--text-secondary)'}
                     >
-                      <Trash2 size={16} />
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 </div>
               </div>
             );
-          })
-        )}
-      </div>
+          })}
+        </div>
+      ) : (
+        /* VISTA 2: LISTA COMPACTA (ALTA VELOCIDAD Y VISIBILIDAD MASIVA) */
+        <div style={{ padding: '0.5rem 2rem 2.5rem' }}>
+          <div style={{
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            borderRadius: '12px',
+            overflow: 'hidden'
+          }}>
+            {/* Table Header */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '120px 100px 1fr 180px 110px 140px',
+              gap: '0.75rem',
+              padding: '0.75rem 1rem',
+              backgroundColor: 'var(--bg-primary)',
+              borderBottom: '1px solid var(--border)',
+              fontSize: '0.72rem',
+              fontWeight: '700',
+              color: 'var(--text-secondary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>
+              <div>Intención</div>
+              <div>Categoría</div>
+              <div>Mensaje / Detalle</div>
+              <div>Cliente & Origen</div>
+              <div>Fecha</div>
+              <div style={{ textAlign: 'right' }}>Acciones</div>
+            </div>
 
-      {/* Modal para agregar nota manual */}
+            {/* Table Rows */}
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {filteredNotes.map(note => {
+                const cat = categoriesMap[note.category] || {
+                  label: note.category,
+                  emoji: '📌',
+                  color: '#6366f1',
+                  bg: 'rgba(99, 102, 241, 0.12)'
+                };
+                const isCompleted = note.status === 'completado';
+                const intent = detectIntent(note.originalText || note.title);
+                const subKeyword = extractSubKeyword(note.title, note.originalText);
+                const cleanTitle = cleanNoteTitle(note.title);
+
+                return (
+                  <div
+                    key={note.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '120px 100px 1fr 180px 110px 140px',
+                      gap: '0.75rem',
+                      padding: '0.75rem 1rem',
+                      alignItems: 'center',
+                      borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
+                      backgroundColor: isCompleted ? 'rgba(0, 0, 0, 0.15)' : 'transparent',
+                      opacity: isCompleted ? 0.6 : 1,
+                      transition: 'background 0.15s'
+                    }}
+                  >
+                    {/* Intención */}
+                    <div>
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: '700',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        backgroundColor: intent.bg,
+                        color: intent.color,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.2rem'
+                      }}>
+                        {intent.emoji} {intent.label}
+                      </span>
+                    </div>
+
+                    {/* Categoría */}
+                    <div>
+                      <span style={{
+                        fontSize: '0.7rem',
+                        fontWeight: '600',
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        backgroundColor: cat.bg,
+                        color: cat.color,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.2rem'
+                      }}>
+                        {cat.emoji} {cat.label}
+                      </span>
+                    </div>
+
+                    {/* Mensaje & Subkeyword */}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {subKeyword && (
+                          <span style={{
+                            fontSize: '0.68rem',
+                            fontWeight: '700',
+                            padding: '1px 5px',
+                            borderRadius: '3px',
+                            backgroundColor: 'rgba(255,255,255,0.08)',
+                            color: 'var(--text-primary)',
+                            flexShrink: 0
+                          }}>
+                            {subKeyword}
+                          </span>
+                        )}
+                        <strong style={{
+                          fontSize: '0.85rem',
+                          color: isCompleted ? 'var(--text-secondary)' : 'var(--text-primary)',
+                          textDecoration: isCompleted ? 'line-through' : 'none',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }} title={note.originalText || note.title}>
+                          {cleanTitle}
+                        </strong>
+                      </div>
+                    </div>
+
+                    {/* Cliente & Grupo */}
+                    <div style={{ fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong style={{ color: 'var(--text-primary)' }}>
+                        {note.senderName || note.sourceName}
+                      </strong>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {note.sourceName}
+                      </div>
+                    </div>
+
+                    {/* Fecha */}
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                      {formatDate(note.timestamp)}
+                    </div>
+
+                    {/* Acciones */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
+                      <button
+                        onClick={() => handleToggleStatus(note)}
+                        title={isCompleted ? 'Marcar pendiente' : 'Marcar resuelto'}
+                        style={{
+                          backgroundColor: isCompleted ? 'transparent' : 'rgba(16, 185, 129, 0.15)',
+                          border: isCompleted ? '1px solid var(--border)' : '1px solid #10b981',
+                          color: isCompleted ? 'var(--text-secondary)' : '#10b981',
+                          padding: '0.3rem 0.5rem',
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          fontSize: '0.72rem',
+                          fontWeight: '600',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.2rem'
+                        }}
+                      >
+                        {isCompleted ? <Circle size={12} /> : <Check size={12} />}
+                        {isCompleted ? 'Pend.' : 'Listo'}
+                      </button>
+
+                      {note.chatId && onOpenChat && (
+                        <button
+                          onClick={() => onOpenChat(note.chatId)}
+                          title="Abrir chat original"
+                          style={{
+                            background: 'none',
+                            border: '1px solid var(--border)',
+                            color: 'var(--accent)',
+                            padding: '0.3rem',
+                            borderRadius: '5px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <ExternalLink size={13} />
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleDelete(note.id)}
+                        title="Eliminar"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--text-secondary)',
+                          padding: '0.3rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Consolidador de Pedidos */}
+      <OrderSummaryModal
+        isOpen={showOrderModal}
+        onClose={() => setShowOrderModal(false)}
+        notes={notes}
+        onResolveNote={handleToggleStatus}
+        onOpenChat={onOpenChat}
+      />
+
+      {/* Modal: Administrador de Categorías */}
+      <CategoryManagerModal
+        isOpen={showCategoryModal}
+        onClose={() => setShowCategoryModal(false)}
+        workspaceId="personal"
+      />
+
+      {/* Modal: Reglas de Extracción por Chat */}
+      <ChatExtractionRulesModal
+        isOpen={showChatRulesModal}
+        onClose={() => setShowChatRulesModal(false)}
+        workspaceId="personal"
+      />
+
+      {/* Modal: Nueva Nota Manual */}
       {showAddModal && (
         <div style={{
           position: 'fixed',
@@ -773,24 +1405,23 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.6)',
+          backgroundColor: 'rgba(0,0,0,0.7)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000,
-          padding: '1rem'
+          zIndex: 1000
         }}>
           <div style={{
             backgroundColor: 'var(--bg-secondary)',
-            borderRadius: '12px',
             border: '1px solid var(--border)',
-            width: '100%',
-            maxWidth: '480px',
+            borderRadius: '16px',
             padding: '1.5rem',
-            boxShadow: '0 8px 30px rgba(0,0,0,0.3)'
+            width: '100%',
+            maxWidth: '500px',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.5)'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.2rem' }}>
-              <h2 style={{ fontSize: '1.2rem', fontWeight: '700', margin: 0 }}>Agregar Tarea / Nota Manual</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Nueva Tarea / Nota Manual</h3>
               <button
                 onClick={() => setShowAddModal(false)}
                 style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
@@ -799,9 +1430,9 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
               </button>
             </div>
 
-            <form onSubmit={handleCreateManualNote}>
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+            <form onSubmit={handleCreateManualNote} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
                   Categoría
                 </label>
                 <select
@@ -814,24 +1445,25 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                     border: '1px solid var(--border)',
                     borderRadius: '8px',
                     color: 'var(--text-primary)',
-                    fontSize: '0.85rem'
+                    fontSize: '0.9rem'
                   }}
                 >
-                  <option value="colegio">🎒 Colegio & Niños (flautas, tareas, exámenes)</option>
-                  <option value="cumpleanos">🎂 Cumpleaños & Festejos</option>
-                  <option value="compras">🛒 Compras & Pendientes (super, farmacia)</option>
-                  <option value="compromisos">📅 Compromisos / Familia / Médico</option>
+                  {activeCategories.map(cat => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.emoji || '📌'} {cat.label || cat.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                  Título / Tarea a recordar *
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                  Título de la Tarea / Asunto *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="Ej: Comprar flauta dulce para clase de música"
+                  placeholder="Ej. Llevar frutillas a Susana, Comprar bolsas..."
                   value={newNote.title}
                   onChange={(e) => setNewNote({ ...newNote, title: e.target.value })}
                   style={{
@@ -841,18 +1473,19 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                     border: '1px solid var(--border)',
                     borderRadius: '8px',
                     color: 'var(--text-primary)',
-                    fontSize: '0.85rem'
+                    fontSize: '0.9rem',
+                    boxSizing: 'border-box'
                   }}
                 />
               </div>
 
-              <div style={{ marginBottom: '1rem' }}>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                  Detalles o notas adicionales
+              <div>
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                  Detalle / Nota
                 </label>
                 <textarea
                   rows={3}
-                  placeholder="Ej: La seño pidió que sea marca Yamaha o similar para el martes..."
+                  placeholder="Detalles adicionales, cantidades, horario de entrega..."
                   value={newNote.originalText}
                   onChange={(e) => setNewNote({ ...newNote, originalText: e.target.value })}
                   style={{
@@ -863,22 +1496,22 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                     borderRadius: '8px',
                     color: 'var(--text-primary)',
                     fontSize: '0.85rem',
+                    boxSizing: 'border-box',
                     resize: 'vertical'
                   }}
                 />
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
                   style={{
                     padding: '0.6rem 1rem',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border)',
                     backgroundColor: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
                     color: 'var(--text-secondary)',
-                    fontSize: '0.85rem',
                     cursor: 'pointer'
                   }}
                 >
@@ -887,12 +1520,11 @@ export default function SmartOrganizer({ onOpenChat, onNavigateToChannels, isPar
                 <button
                   type="submit"
                   style={{
-                    padding: '0.6rem 1.2rem',
-                    borderRadius: '8px',
-                    border: 'none',
+                    padding: '0.6rem 1.25rem',
                     backgroundColor: '#6366f1',
+                    border: 'none',
+                    borderRadius: '8px',
                     color: 'white',
-                    fontSize: '0.85rem',
                     fontWeight: '600',
                     cursor: 'pointer'
                   }}

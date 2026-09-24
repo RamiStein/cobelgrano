@@ -30,6 +30,25 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
              )));
   };
 
+  const isLid = (str) => {
+    if (!str) return false;
+    const clean = String(str).replace('@lid', '').replace('@c.us', '');
+    return str.includes('@lid') || (clean.length >= 14 && clean.startsWith('1'));
+  };
+
+  const formatPhoneNumber = (num) => {
+    if (!num) return '';
+    const clean = String(num).replace(/\D/g, '');
+    if (isLid(clean)) return 'WhatsApp Directo';
+    if (clean.startsWith('549') && clean.length >= 12) {
+      return `+54 9 ${clean.slice(3, 5)} ${clean.slice(5, 9)}-${clean.slice(9)}`;
+    }
+    if (clean.startsWith('54') && clean.length >= 11) {
+      return `+54 ${clean.slice(2, 4)} ${clean.slice(4, 8)}-${clean.slice(8)}`;
+    }
+    return `+${clean}`;
+  };
+
   const getDisplayNumber = (chat) => {
     if (chat.channel === 'instagram' || chat.author?.startsWith('ig_')) {
       return '@' + (chat.number || chat.pushname || chat.name || chat.author.replace('ig_', ''));
@@ -37,16 +56,26 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
     if (isGroupChat(chat)) {
       return 'Grupo de WhatsApp';
     }
-    if (chat.contactId && chat.contactId.includes('@c.us')) {
-      return chat.contactId.split('@')[0];
+    const raw = chat.contactId?.includes('@c.us') ? chat.contactId.split('@')[0] : (chat.number || chat.author?.split('@')[0]);
+    if (!raw || isLid(raw) || isLid(chat.author)) {
+      return 'WhatsApp Directo';
     }
-    return chat.author?.split('@')[0] || '';
+    return formatPhoneNumber(raw);
+  };
+
+  const getLastMessagePreview = (chat) => {
+    if (chat.lastMessage && typeof chat.lastMessage === 'string') {
+      return chat.lastMessage;
+    }
+    return getDisplayNumber(chat);
   };
 
   const formatName = (chat) => {
     if (chat.channel === 'instagram' || chat.author?.startsWith('ig_')) {
       return chat.name || chat.pushname || ('@' + chat.author.replace('ig_', ''));
     }
+    if (chat.name && chat.name !== 'Grupo de WhatsApp') return chat.name;
+    if (chat.pushname && chat.pushname !== 'Grupo de WhatsApp') return chat.pushname;
     if (chat.name) return chat.name;
     if (chat.pushname) return chat.pushname;
     return getDisplayNumber(chat);
@@ -55,7 +84,25 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
   const formatDate = (timestamp) => {
     if (!timestamp) return '';
     const date = new Date(timestamp * 1000);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    
+    if (isToday) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (date.toDateString() === yesterday.toDateString()) {
+      return 'Ayer';
+    }
+
+    const diffDays = Math.round((now - date) / (1000 * 60 * 60 * 24));
+    if (diffDays < 7) {
+      return date.toLocaleDateString([], { weekday: 'short' });
+    }
+
+    return date.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
   };
 
   // 1. Filtrar primero por el espacio activo (Aislamiento Total)
@@ -68,14 +115,16 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
     }
   });
 
-  // 2. Filtrar por subcategorías/canales
+  // Filtrado de chats por canal / tipo y término de búsqueda
   const filteredChats = workspaceChats.filter(chat => {
-    // Filtro de búsqueda
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const name = formatName(chat).toLowerCase();
-      const num = getDisplayNumber(chat).toLowerCase();
-      if (!name.includes(q) && !num.includes(q)) return false;
+    const q = searchQuery.toLowerCase();
+    const nameMatch = (chat.name || '').toLowerCase().includes(q);
+    const numberMatch = (chat.number || '').toString().includes(q);
+    const authorMatch = (chat.author || '').toLowerCase().includes(q);
+    const pushnameMatch = (chat.pushname || '').toLowerCase().includes(q);
+
+    if (searchQuery.trim() && !(nameMatch || numberMatch || authorMatch || pushnameMatch)) {
+      return false;
     }
 
     if (workspace === 'personal') {
@@ -89,6 +138,9 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
     }
   });
 
+  // Ordenar por última actividad descendente (chats más recientes primero)
+  filteredChats.sort((a, b) => (Number(b.lastActivity) || 0) - (Number(a.lastActivity) || 0));
+
   // Contadores
   const groupsCount = workspaceChats.filter(c => isGroupChat(c)).length;
   const directCount = workspaceChats.filter(c => !isGroupChat(c)).length;
@@ -96,10 +148,18 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
   const instagramCount = workspaceChats.filter(c => isInstagramChat(c)).length;
 
   return (
-    <div className="sidebar" style={{ width: '350px', display: 'flex', flexDirection: 'column' }}>
-      <div className="sidebar-header" style={{ paddingBottom: '0.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1 style={{ fontSize: '1.3rem', margin: 0 }}>
+    <div className="sidebar" style={{ width: '350px', minWidth: '350px', maxWidth: '350px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{
+        padding: '1.1rem 1.1rem 0.65rem',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.5rem',
+        width: '100%',
+        boxSizing: 'border-box'
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <h1 style={{ fontSize: '1.2rem', fontWeight: '700', margin: 0, color: 'var(--text-primary)' }}>
             {workspace === 'personal' ? 'Chats & Grupos' : 'Conversaciones'}
           </h1>
           <span style={{
@@ -142,12 +202,17 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
         </div>
         
         {/* Filtros */}
-        <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.6rem' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.6rem', width: '100%', boxSizing: 'border-box' }}>
           <button
             onClick={() => setFilterChannel('all')}
+            title={`Todos (${workspaceChats.length})`}
             style={{
               flex: 1,
-              padding: '0.3rem 0.4rem',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              padding: '0.35rem 0.3rem',
               borderRadius: '6px',
               border: filterChannel === 'all' ? '1px solid var(--accent)' : '1px solid var(--border)',
               backgroundColor: filterChannel === 'all' ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-primary)',
@@ -164,9 +229,14 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
             <>
               <button
                 onClick={() => setFilterChannel('groups')}
+                title={`Grupos (${groupsCount})`}
                 style={{
                   flex: 1,
-                  padding: '0.3rem 0.4rem',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  padding: '0.35rem 0.3rem',
                   borderRadius: '6px',
                   border: filterChannel === 'groups' ? '1px solid #6366f1' : '1px solid var(--border)',
                   backgroundColor: filterChannel === 'groups' ? 'rgba(99, 102, 241, 0.15)' : 'var(--bg-primary)',
@@ -180,9 +250,14 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
               </button>
               <button
                 onClick={() => setFilterChannel('direct')}
+                title={`Directos (${directCount})`}
                 style={{
                   flex: 1,
-                  padding: '0.3rem 0.4rem',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  padding: '0.35rem 0.3rem',
                   borderRadius: '6px',
                   border: filterChannel === 'direct' ? '1px solid #10b981' : '1px solid var(--border)',
                   backgroundColor: filterChannel === 'direct' ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-primary)',
@@ -199,9 +274,14 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
             <>
               <button
                 onClick={() => setFilterChannel('whatsapp')}
+                title={`WhatsApp (${whatsappCount})`}
                 style={{
                   flex: 1,
-                  padding: '0.3rem 0.4rem',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  padding: '0.35rem 0.3rem',
                   borderRadius: '6px',
                   border: filterChannel === 'whatsapp' ? '1px solid #22c55e' : '1px solid var(--border)',
                   backgroundColor: filterChannel === 'whatsapp' ? 'rgba(34, 197, 94, 0.15)' : 'var(--bg-primary)',
@@ -215,9 +295,14 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
               </button>
               <button
                 onClick={() => setFilterChannel('instagram')}
+                title={`Instagram (${instagramCount})`}
                 style={{
                   flex: 1,
-                  padding: '0.3rem 0.4rem',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  padding: '0.35rem 0.3rem',
                   borderRadius: '6px',
                   border: filterChannel === 'instagram' ? '1px solid #e1306c' : '1px solid var(--border)',
                   backgroundColor: filterChannel === 'instagram' ? 'rgba(225, 48, 108, 0.15)' : 'var(--bg-primary)',
@@ -238,6 +323,7 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
         {filteredChats.map(chat => {
           const isIg = isInstagramChat(chat);
           const isGroup = isGroupChat(chat);
+          const previewText = getLastMessagePreview(chat);
 
           return (
             <div 
@@ -307,13 +393,43 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
                 <span className="chat-time" style={{ flexShrink: 0 }}>{formatDate(chat.lastActivity)}</span>
               </div>
 
-              <div className="chat-preview" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem' }}>
-                <span style={{ opacity: 0.7, fontSize: '0.8rem' }}>{getDisplayNumber(chat)}</span>
-                {chat.tag && (
-                  <span className="tag-badge" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <TagIcon size={10} /> {chat.tag}
-                  </span>
-                )}
+              <div className="chat-preview" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.25rem', gap: '0.5rem' }}>
+                <span 
+                  style={{ 
+                    opacity: 0.75, 
+                    fontSize: '0.8rem', 
+                    overflow: 'hidden', 
+                    textOverflow: 'ellipsis', 
+                    whiteSpace: 'nowrap',
+                    flex: 1
+                  }}
+                  title={previewText}
+                >
+                  {previewText}
+                </span>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                  {chat.unreadCount > 0 && (
+                    <span style={{
+                      backgroundColor: '#22c55e',
+                      color: 'white',
+                      fontSize: '0.68rem',
+                      fontWeight: '700',
+                      borderRadius: '10px',
+                      padding: '1px 6px',
+                      minWidth: '16px',
+                      textAlign: 'center',
+                      lineHeight: '1.2'
+                    }}>
+                      {chat.unreadCount}
+                    </span>
+                  )}
+                  {chat.tag && (
+                    <span className="tag-badge" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <TagIcon size={10} /> {chat.tag}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           );

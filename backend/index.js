@@ -6,6 +6,7 @@ const { doc, setDoc, onSnapshot, collection, query, orderBy, deleteDoc, updateDo
 const { ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 const qrcode = require('qrcode-terminal');
 const zernioService = require('./zernioService');
+const partnerService = require('./partnerService');
 
 process.on('unhandledRejection', (reason) => {
     console.error('[Process Handled Rejection]', reason?.message || reason);
@@ -232,23 +233,30 @@ async function start() {
         }
     });
 
-    // Iniciar servicio Zernio en la nube
+    // Iniciar servicio Zernio en la nube (WhatsApp Cloud Oficial COB + Instagram)
     try {
         await zernioService.init();
     } catch (e) {
         console.error('[Zernio] Error inicializando:', e.message);
     }
 
-    // Si Zernio está conectado a Meta Cloud API, no necesitamos el cliente local frágil
+    // Iniciar servicio de WhatsApp para Espacio Personal (Compañera / Grupos Escolares)
+    try {
+        await partnerService.init();
+    } catch (e) {
+        console.error('[Partner WhatsApp] Error inicializando:', e.message);
+    }
+
+    // Si Zernio está conectado a Meta Cloud API para COB
     if (zernioService.accountId) {
-        console.log('[WhatsApp] Conectado exitosamente a través de Zernio Meta Cloud API. Sistema 100% operativo en la nube.');
+        console.log('[WhatsApp COB] Conectado exitosamente a través de Zernio Meta Cloud API.');
         await setDoc(doc(db, "system", "status"), { qr: null, isReady: true }, { merge: true });
     } else {
         try {
-            console.log('[WhatsApp Web] Inicializando cliente local como respaldo...');
+            console.log('[WhatsApp Web COB] Inicializando cliente local como respaldo...');
             client.initialize();
         } catch (e) {
-            console.error('[WhatsApp Web] Error al inicializar cliente local:', e.message);
+            console.error('[WhatsApp Web COB] Error al inicializar cliente local:', e.message);
         }
     }
 
@@ -258,8 +266,11 @@ async function start() {
             if (change.type === 'added') {
                 const data = change.doc.data();
                 try {
-                    console.log(`[Outbox] Despachando mensaje hacia ${data.chatId}...`);
-                    if (zernioService.apiKey && (zernioService.accountId || zernioService.partnerAccountId)) {
+                    console.log(`[Outbox] Despachando mensaje hacia ${data.chatId} (workspace: ${data.workspaceId || 'cob'})...`);
+                    if (data.workspaceId === 'personal' && partnerService.isReady()) {
+                        console.log('[Outbox] Enviando a través de WhatsApp Web Personal...');
+                        await partnerService.sendMessage(data.chatId, data.text);
+                    } else if (zernioService.apiKey && (zernioService.accountId || zernioService.partnerAccountId)) {
                         console.log('[Outbox] Enviando a través de Zernio Meta Cloud API...');
                         await zernioService.dispatchOutboxMessage(data);
                     } else if (client) {

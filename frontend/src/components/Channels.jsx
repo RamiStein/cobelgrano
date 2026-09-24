@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
 import { 
   Radio, CheckCircle2, AlertCircle, RefreshCw, Key, ExternalLink, 
-  MessageSquare, ShieldCheck, Check, Sparkles, Smartphone, Share2, QrCode as QrIcon
+  MessageSquare, ShieldCheck, Check, Sparkles, Smartphone, Share2, QrCode as QrIcon,
+  X, Maximize2
 } from 'lucide-react';
 import QRCode from 'react-qr-code';
 import { db } from '../firebase';
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 
 const ZERNIO_BASE_URL = 'https://zernio.com/api/v1';
+
+const DEFAULT_PARTNER_AUTH_URL = 'https://www.facebook.com/v22.0/dialog/oauth?client_id=712341431446535&redirect_uri=https%3A%2F%2Fzernio.com%2Fapi%2Fv1%2Fconnect%2Fwhatsapp%2Fcallback&scope=whatsapp_business_management%2Cwhatsapp_business_messaging%2Cwhatsapp_business_manage_events%2Cbusiness_management&response_type=code&config_id=920007930882314&override_default_response_type=true&state=6a5b7e6d434a613f8ae316c3-6ab071431eb011d0b9ddaef7-1789957305227-https%253A%252F%252Ffrontend-lovat-five-bbcuj2lohv.vercel.app-ct_4b767717f43a7f26736229ac2ae5cd83fc3d9e0b4df130b4&extras=%7B%22sessionInfoVersion%22%3A%223%22%2C%22featureType%22%3A%22whatsapp_business_app_onboarding%22%7D';
 
 // Icono personalizado de Instagram
 function InstagramIcon({ size = 22, color = "white" }) {
@@ -31,7 +34,7 @@ function FacebookIcon({ size = 22, color = "white" }) {
 
 export default function Channels() {
   const [config, setConfig] = useState({
-    apiKey: '',
+    apiKey: 'sk_8e06ac9cdb51753e1992f6286a6dc3277d525ca5704639fcc577e403e2ccddb4',
     profileId: '',
     profileName: 'Consultorios Odontológicos Belgrano',
     accountId: '',
@@ -44,19 +47,46 @@ export default function Channels() {
     partnerProfileId: '6ab071431eb011d0b9ddaef7',
     partnerAccountId: '',
     partnerPhoneNumber: '',
-    partnerStatus: 'disconnected'
+    partnerStatus: 'disconnected',
+    partnerAuthUrl: DEFAULT_PARTNER_AUTH_URL
   });
 
-  const [inputApiKey, setInputApiKey] = useState('');
+  const [inputApiKey, setInputApiKey] = useState('sk_8e06ac9cdb51753e1992f6286a6dc3277d525ca5704639fcc577e403e2ccddb4');
   const [showKey, setShowKey] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
   const [syncing, setSyncing] = useState(false);
 
   // QR y enlace de WhatsApp Personal
-  const [partnerAuthUrl, setPartnerAuthUrl] = useState('');
+  const [partnerAuthUrl, setPartnerAuthUrl] = useState(DEFAULT_PARTNER_AUTH_URL);
+  const [partnerWebQr, setPartnerWebQr] = useState(null);
   const [loadingPartnerQr, setLoadingPartnerQr] = useState(false);
   const [copiedPartnerLink, setCopiedPartnerLink] = useState(false);
+  const [isEditingKey, setIsEditingKey] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+
+  // Modo de vinculación: 'code' (código de 8 dígitos) o 'qr' (cámara)
+  const [partnerLinkMode, setPartnerLinkMode] = useState('code');
+  const [pairingPhone, setPairingPhone] = useState('');
+  const [pairingCode, setPairingCode] = useState(null);
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState(null);
+  const [copiedPairingCode, setCopiedPairingCode] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+
+  const handleResetWhatsAppSession = async () => {
+    setIsResetting(true);
+    try {
+      await setDoc(doc(db, 'system', 'partner_reset_request'), {
+        triggerReset: Date.now()
+      }, { merge: true });
+      alert('Reiniciando sesión limpia de WhatsApp Web. En segundos tendrás un nuevo código QR y código de vinculación listos.');
+    } catch (err) {
+      alert('Error reiniciando sesión: ' + err.message);
+    } finally {
+      setTimeout(() => setIsResetting(false), 5000);
+    }
+  };
 
   const fetchPartnerAuthUrl = async (customKey) => {
     const key = customKey || config.apiKey || inputApiKey.trim();
@@ -96,11 +126,50 @@ export default function Channels() {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setConfig(prev => ({ ...prev, ...data }));
-        if (data.apiKey && !inputApiKey) {
+        if (data.apiKey) {
           setInputApiKey(data.apiKey);
         }
-        if (data.apiKey && data.partnerStatus !== 'connected') {
+        if (data.partnerQr) {
+          setPartnerWebQr(data.partnerQr);
+        }
+        if (data.partnerAuthUrl) {
+          setPartnerAuthUrl(data.partnerAuthUrl);
+        } else if (data.apiKey && data.partnerStatus !== 'connected') {
           fetchPartnerAuthUrl(data.apiKey);
+        }
+      }
+    });
+
+    const unsubPartner = onSnapshot(doc(db, 'system', 'partner_status'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.qr) {
+          setPartnerWebQr(d.qr);
+        }
+        if (d.pairingCode) {
+          setPairingCode(d.pairingCode);
+          setPairingLoading(false);
+        }
+        if (d.status === 'connected' && d.phoneNumber) {
+          setConfig(prev => ({
+            ...prev,
+            partnerStatus: 'connected',
+            partnerPhoneNumber: d.phoneNumber
+          }));
+        }
+      }
+    });
+
+    const unsubPairingReq = onSnapshot(doc(db, 'system', 'partner_pairing_request'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        if (d.status === 'ready' && d.code) {
+          setPairingCode(d.code);
+          setPairingLoading(false);
+          setPairingError(null);
+        } else if (d.status === 'error') {
+          setPairingError(d.error || 'Error al generar código.');
+          setPairingLoading(false);
         }
       }
     });
@@ -118,7 +187,11 @@ export default function Channels() {
       handleInstagramCallback(accountIdParam, usernameParam, profileIdParam);
     }
 
-    return () => unsub();
+    return () => {
+      unsub();
+      unsubPartner();
+      unsubPairingReq();
+    };
   }, []);
 
   const handleWhatsAppCallback = async (accId, username, profId) => {
@@ -393,6 +466,27 @@ export default function Channels() {
     }
   };
 
+  const handleRequestPairingCode = async (e) => {
+    if (e) e.preventDefault();
+    if (!pairingPhone.trim()) {
+      setStatusMessage({ type: 'error', text: 'Por favor ingresa el número de WhatsApp de tu compañera.' });
+      return;
+    }
+    setPairingLoading(true);
+    setPairingError(null);
+    try {
+      await setDoc(doc(db, 'system', 'partner_pairing_request'), {
+        phoneNumber: pairingPhone.trim(),
+        status: 'requested',
+        requestedAt: Date.now()
+      }, { merge: true });
+      setStatusMessage({ type: 'info', text: 'Generando código oficial de 8 dígitos con WhatsApp...' });
+    } catch (err) {
+      setPairingError(err.message);
+      setPairingLoading(false);
+    }
+  };
+
   // Comprobar cuentas existentes en Zernio (COB + Personal + Instagram)
   const checkAccounts = async (customKey) => {
     const key = customKey || config.apiKey || inputApiKey.trim();
@@ -460,28 +554,75 @@ export default function Channels() {
   };
 
   const isWhatsAppConnected = config.status === 'connected' && config.accountId;
-  const isPartnerWhatsAppConnected = config.partnerStatus === 'connected' && config.partnerAccountId;
+  const isPartnerWhatsAppConnected = config.partnerStatus === 'connected' && (config.partnerAccountId || config.partnerPhoneNumber);
   const isInstagramConnected = config.instagramStatus === 'connected' && config.instagramAccountId;
+  const activePartnerQr = partnerWebQr || config.partnerQr || partnerAuthUrl;
+  const isWebQrMode = !!(partnerWebQr || config.partnerQr);
+
 
   return (
-    <div className="channels-container" style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto', color: 'var(--text-primary)' }}>
+    <div className="channels-container" style={{ 
+      width: '100%', 
+      padding: '1.25rem 1.5rem 6rem', 
+      maxWidth: '1080px', 
+      margin: '0 auto', 
+      color: 'var(--text-primary)' 
+    }}>
       {/* Header */}
-      <div style={{ marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-          <Radio size={28} color="var(--accent)" />
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 'bold', margin: 0 }}>Canales & Integraciones Oficiales</h1>
+      <div style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
+            <Radio size={26} color="var(--accent)" />
+            <h1 style={{ fontSize: '1.6rem', fontWeight: 'bold', margin: 0 }}>Canales & Integraciones Oficiales</h1>
+          </div>
+          <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.85rem' }}>
+            Conexión omnicanal unificada (WhatsApp, Instagram y Ads) mediante <strong>Meta Cloud</strong>.
+          </p>
         </div>
-        <p style={{ color: 'var(--text-secondary)', margin: 0 }}>
-          Conexión omnicanal unificada (WhatsApp, Instagram, Facebook y Ads) mediante <strong>Zernio API</strong> & <strong>Meta Cloud</strong>.
-        </p>
+
+        {/* Badge / Acción rápida de API Key */}
+        {!isEditingKey && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            padding: '0.35rem 0.75rem',
+            fontSize: '0.78rem'
+          }}>
+            <Key size={14} color="var(--accent)" />
+            <span style={{ color: 'var(--text-secondary)' }}>Zernio API:</span>
+            <code style={{ color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '1px 5px', borderRadius: '4px' }}>
+              sk_••••••••
+            </code>
+            <span style={{ color: '#10b981', fontWeight: 'bold' }}>✓ Conectada</span>
+            <button
+              type="button"
+              onClick={() => setIsEditingKey(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                fontSize: '0.75rem',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+                marginLeft: '0.3rem'
+              }}
+            >
+              Modificar
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Banner de Mensajes / Estado */}
       {statusMessage && (
         <div style={{
-          padding: '1rem',
+          padding: '0.75rem 1rem',
           borderRadius: '8px',
-          marginBottom: '1.5rem',
+          marginBottom: '1.25rem',
           display: 'flex',
           alignItems: 'center',
           gap: '0.75rem',
@@ -489,100 +630,99 @@ export default function Channels() {
           border: `1px solid ${statusMessage.type === 'success' ? '#22c55e' : statusMessage.type === 'error' ? '#ef4444' : '#3b82f6'}`,
           color: 'var(--text-primary)'
         }}>
-          {statusMessage.type === 'success' ? <CheckCircle2 color="#22c55e" size={20} /> : statusMessage.type === 'error' ? <AlertCircle color="#ef4444" size={20} /> : <Sparkles color="#3b82f6" size={20} />}
-          <span style={{ fontSize: '0.9rem', flex: 1 }}>{statusMessage.text}</span>
+          {statusMessage.type === 'success' ? <CheckCircle2 color="#22c55e" size={18} /> : statusMessage.type === 'error' ? <AlertCircle color="#ef4444" size={18} /> : <Sparkles color="#3b82f6" size={18} />}
+          <span style={{ fontSize: '0.85rem', flex: 1 }}>{statusMessage.text}</span>
           <button onClick={() => setStatusMessage(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>✕</button>
         </div>
       )}
 
-      {/* Configuración de API Key de Zernio */}
-      <div className="card" style={{
-        backgroundColor: 'var(--bg-secondary)',
-        padding: '1.5rem',
-        borderRadius: '12px',
-        border: '1px solid var(--border)',
-        marginBottom: '2rem'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Key size={20} color="var(--accent)" />
-            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Autenticación Zernio API</h3>
-          </div>
-          <a 
-            href="https://zernio.com/dashboard/api-keys" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            style={{ fontSize: '0.85rem', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '0.3rem', textDecoration: 'none' }}
-          >
-            Panel de API Keys <ExternalLink size={14} />
-          </a>
-        </div>
-
-        <form onSubmit={handleSaveApiKey} style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <input 
-              type={showKey ? 'text' : 'password'}
-              value={inputApiKey}
-              onChange={(e) => setInputApiKey(e.target.value)}
-              placeholder="sk_..."
-              style={{
-                width: '100%',
-                padding: '0.75rem 3rem 0.75rem 1rem',
-                borderRadius: '8px',
-                border: '1px solid var(--border)',
-                backgroundColor: 'var(--bg-primary)',
-                color: 'var(--text-primary)',
-                fontFamily: 'monospace',
-                fontSize: '0.9rem'
-              }}
-            />
-            <button 
+      {/* Panel de Edición de API Key (Solo cuando el usuario hace clic en Modificar) */}
+      {isEditingKey && (
+        <div className="card" style={{
+          backgroundColor: 'var(--bg-secondary)',
+          padding: '1rem 1.25rem',
+          borderRadius: '12px',
+          border: '1px solid var(--border)',
+          marginBottom: '1.25rem'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Key size={18} color="var(--accent)" />
+              <h3 style={{ margin: 0, fontSize: '0.95rem' }}>Actualizar API Key de Zernio</h3>
+            </div>
+            <button
               type="button"
-              onClick={() => setShowKey(!showKey)}
-              style={{
-                position: 'absolute',
-                right: '10px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                fontSize: '0.8rem'
-              }}
+              onClick={() => setIsEditingKey(false)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '0.8rem', cursor: 'pointer' }}
             >
-              {showKey ? 'Ocultar' : 'Ver'}
+              Cancelar
             </button>
           </div>
 
-          <button 
-            type="submit" 
-            disabled={loading || !inputApiKey.trim()}
-            style={{
-              padding: '0.75rem 1.5rem',
-              backgroundColor: 'var(--accent)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}
-          >
-            {loading ? <RefreshCw className="spin" size={16} /> : <Check size={16} />}
-            Guardar Clave
-          </button>
-        </form>
-        <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          Esta clave conecta todos los canales (WhatsApp, Instagram, Meta Ads y Facebook) de forma centralizada en la nube.
-        </p>
-      </div>
+          <form onSubmit={(e) => { handleSaveApiKey(e); setIsEditingKey(false); }} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <input 
+                type={showKey ? 'text' : 'password'}
+                value={inputApiKey}
+                onChange={(e) => setInputApiKey(e.target.value)}
+                placeholder="sk_..."
+                style={{
+                  width: '100%',
+                  padding: '0.6rem 3rem 0.6rem 0.85rem',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                  backgroundColor: 'var(--bg-primary)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'monospace',
+                  fontSize: '0.85rem'
+                }}
+              />
+              <button 
+                type="button"
+                onClick={() => setShowKey(!showKey)}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem'
+                }}
+              >
+                {showKey ? 'Ocultar' : 'Ver'}
+              </button>
+            </div>
+
+            <button 
+              type="submit" 
+              disabled={loading || !inputApiKey.trim()}
+              style={{
+                padding: '0.6rem 1.25rem',
+                backgroundColor: 'var(--accent)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                fontSize: '0.85rem'
+              }}
+            >
+              {loading ? <RefreshCw className="spin" size={15} /> : <Check size={15} />}
+              Guardar
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* Grid de Canales */}
-      <h2 style={{ fontSize: '1.3rem', marginBottom: '1rem' }}>Canales Disponibles</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+      <h2 style={{ fontSize: '1.2rem', marginBottom: '0.85rem', color: 'var(--text-primary)' }}>Canales Disponibles</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.25rem' }}>
         
         {/* WhatsApp Card */}
         <div style={{
@@ -773,116 +913,263 @@ export default function Channels() {
               </div>
             ) : (
               <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                textAlign: 'center',
                 backgroundColor: 'var(--bg-primary)',
-                padding: '1.25rem 1rem',
+                padding: '1rem',
                 borderRadius: '12px',
-                border: '1px dashed rgba(99, 102, 241, 0.4)',
-                margin: '0.5rem 0 1rem'
+                border: '1.5px dashed #6366f1',
+                margin: '0.25rem 0 0.85rem'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#818cf8', marginBottom: '0.35rem' }}>
-                  <QrIcon size={18} />
-                  <strong style={{ fontSize: '0.95rem' }}>Escanear Código QR con el celular</strong>
+                {/* Selector de Modo */}
+                <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.85rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPartnerLinkMode('code')}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem 0.6rem',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      fontWeight: 'bold',
+                      border: partnerLinkMode === 'code' ? '2px solid #6366f1' : '1px solid var(--border)',
+                      backgroundColor: partnerLinkMode === 'code' ? 'rgba(99, 102, 241, 0.2)' : 'var(--bg-secondary)',
+                      color: partnerLinkMode === 'code' ? '#a5b4fc' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.35rem'
+                    }}
+                  >
+                    <Smartphone size={15} /> Código de 8 Dígitos (Sin Cámara)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPartnerLinkMode('qr')}
+                    style={{
+                      flex: 1,
+                      padding: '0.5rem 0.6rem',
+                      borderRadius: '8px',
+                      fontSize: '0.8rem',
+                      fontWeight: 'bold',
+                      border: partnerLinkMode === 'qr' ? '2px solid #6366f1' : '1px solid var(--border)',
+                      backgroundColor: partnerLinkMode === 'qr' ? 'rgba(99, 102, 241, 0.2)' : 'var(--bg-secondary)',
+                      color: partnerLinkMode === 'qr' ? '#a5b4fc' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '0.35rem'
+                    }}
+                  >
+                    <QrIcon size={15} /> Escanear QR
+                  </button>
                 </div>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: '300px', margin: '0 0 1rem 0', lineHeight: '1.35' }}>
-                  Apunta la cámara del celular de tu compañera a este código QR para abrir la vinculación oficial en su teléfono:
-                </p>
 
-                {partnerAuthUrl ? (
-                  <div style={{
-                    backgroundColor: '#ffffff',
-                    padding: '14px',
-                    borderRadius: '14px',
-                    boxShadow: '0 6px 24px rgba(0,0,0,0.3)',
-                    marginBottom: '1rem',
-                    display: 'inline-block'
-                  }}>
-                    <QRCode value={partnerAuthUrl} size={180} />
-                  </div>
-                ) : (
-                  <div style={{ padding: '1.5rem', textAlign: 'center' }}>
-                    {loadingPartnerQr ? (
-                      <span style={{ fontSize: '0.85rem', color: '#818cf8', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <RefreshCw size={16} className="spin" /> Generando código QR oficial de Meta...
-                      </span>
-                    ) : (
+                {partnerLinkMode === 'code' ? (
+                  /* Modo Código de 8 Dígitos */
+                  pairingCode ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{ fontSize: '0.75rem', color: '#a5b4fc', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Código Oficial de WhatsApp Web
+                      </div>
+                      <div style={{
+                        backgroundColor: '#0f172a',
+                        border: '2px solid #6366f1',
+                        borderRadius: '12px',
+                        padding: '0.6rem 1.25rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.85rem'
+                      }}>
+                        <span style={{
+                          fontSize: '2rem',
+                          fontWeight: '900',
+                          letterSpacing: '4px',
+                          color: '#38bdf8',
+                          fontFamily: 'monospace'
+                        }}>
+                          {pairingCode}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(pairingCode.replace('-', ''));
+                            setCopiedPairingCode(true);
+                            setTimeout(() => setCopiedPairingCode(false), 3000);
+                          }}
+                          style={{
+                            padding: '0.35rem 0.65rem',
+                            backgroundColor: copiedPairingCode ? '#10b981' : '#6366f1',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '6px',
+                            fontSize: '0.75rem',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem'
+                          }}
+                        >
+                          {copiedPairingCode ? <Check size={13} /> : <Share2 size={13} />}
+                          {copiedPairingCode ? '¡Copiado!' : 'Copiar'}
+                        </button>
+                      </div>
+
+                      <div style={{
+                        fontSize: '0.78rem',
+                        color: 'var(--text-secondary)',
+                        lineHeight: '1.4',
+                        backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                        padding: '0.75rem',
+                        borderRadius: '8px',
+                        width: '100%',
+                        border: '1px solid rgba(99, 102, 241, 0.2)'
+                      }}>
+                        <strong style={{ color: 'white', display: 'block', marginBottom: '0.3rem' }}>
+                          📱 Pasos en el celular de tu compañera:
+                        </strong>
+                        1. Abre <strong>WhatsApp</strong> en su teléfono.<br />
+                        2. Toca <strong>⋮ o Ajustes &gt; Dispositivos vinculados</strong>.<br />
+                        3. Toca el botón verde <strong>"Vincular un dispositivo"</strong>.<br />
+                        4. Toca abajo la opción: <strong style={{ color: '#38bdf8' }}>"Vincular con el número de teléfono"</strong>.<br />
+                        5. Escribe este código: <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{pairingCode}</strong>.
+                      </div>
+
                       <button
                         type="button"
-                        onClick={() => fetchPartnerAuthUrl()}
+                        onClick={() => setPairingCode(null)}
                         style={{
-                          padding: '0.6rem 1.2rem',
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--text-secondary)',
+                          fontSize: '0.72rem',
+                          cursor: 'pointer',
+                          textDecoration: 'underline'
+                        }}
+                      >
+                        Ingresar otro número o generar nuevo código
+                      </button>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleRequestPairingCode} style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                      <label style={{ fontSize: '0.82rem', fontWeight: '600', color: '#a5b4fc' }}>
+                        Número de celular de tu compañera:
+                      </label>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <input
+                          type="text"
+                          value={pairingPhone}
+                          onChange={(e) => setPairingPhone(e.target.value)}
+                          placeholder="Ej: 11 2345 6789 ó +54 9 11..."
+                          style={{
+                            flex: 1,
+                            padding: '0.6rem 0.85rem',
+                            borderRadius: '8px',
+                            border: '1px solid var(--border)',
+                            backgroundColor: 'var(--bg-secondary)',
+                            color: 'var(--text-primary)',
+                            fontSize: '0.85rem'
+                          }}
+                        />
+                        <button
+                          type="submit"
+                          disabled={pairingLoading || !pairingPhone.trim()}
+                          style={{
+                            padding: '0.6rem 1rem',
+                            backgroundColor: '#6366f1',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            fontWeight: 'bold',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          {pairingLoading ? <RefreshCw className="spin" size={14} /> : <Sparkles size={14} />}
+                          {pairingLoading ? 'Generando...' : 'Obtener Código'}
+                        </button>
+                      </div>
+                      <p style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.3' }}>
+                        ✨ Genera un código de 8 dígitos para escribir en WhatsApp bajo <em>"Vincular con el número de teléfono"</em>. Sin usar cámara.
+                      </p>
+                      {pairingError && (
+                        <div style={{ color: '#ef4444', fontSize: '0.75rem' }}>
+                          ⚠️ {pairingError}
+                        </div>
+                      )}
+                    </form>
+                  )
+                ) : (
+                  /* Modo QR */
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center'
+                  }}>
+                    <div 
+                      onClick={() => setShowQrModal(true)}
+                      style={{
+                        backgroundColor: '#ffffff',
+                        padding: '10px',
+                        borderRadius: '12px',
+                        boxShadow: '0 4px 18px rgba(0,0,0,0.3)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        flexShrink: 0
+                      }}
+                      title="Clic para ver en pantalla completa"
+                    >
+                      <QRCode value={activePartnerQr} size={135} />
+                      <span style={{ fontSize: '0.65rem', color: '#4f46e5', fontWeight: 'bold', marginTop: '3px' }}>
+                        🔍 Clic para agrandar
+                      </span>
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: '170px', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: '1.35' }}>
+                        <strong style={{ color: '#ffffff' }}>Escanear desde WhatsApp:</strong><br />
+                        1. Abre <strong>WhatsApp</strong> en el teléfono de tu compañera.<br />
+                        2. Toca <strong>⋮ o Ajustes &gt; Dispositivos vinculados</strong>.<br />
+                        3. Toca <strong>"Vincular un dispositivo"</strong> y apunta a este QR.
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowQrModal(true)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.35rem',
+                          padding: '0.4rem 0.7rem',
                           backgroundColor: '#6366f1',
                           color: 'white',
                           border: 'none',
-                          borderRadius: '8px',
-                          fontSize: '0.85rem',
+                          borderRadius: '6px',
+                          fontSize: '0.75rem',
                           fontWeight: '600',
                           cursor: 'pointer'
                         }}
                       >
-                        ⚡ Generar Código QR Ahora
+                        <Maximize2 size={13} /> Ver QR en Pantalla Completa
                       </button>
-                    )}
-                  </div>
-                )}
-
-                {partnerAuthUrl && (
-                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center', width: '100%' }}>
-                    <a
-                      href={partnerAuthUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        padding: '0.45rem 0.8rem',
-                        backgroundColor: '#6366f1',
-                        color: 'white',
-                        borderRadius: '6px',
-                        fontSize: '0.75rem',
-                        fontWeight: '600',
-                        textDecoration: 'none'
-                      }}
-                    >
-                      <ExternalLink size={13} />
-                      Abrir en esta pantalla
-                    </a>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(partnerAuthUrl);
-                        setCopiedPartnerLink(true);
-                        setTimeout(() => setCopiedPartnerLink(false), 3000);
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        padding: '0.45rem 0.8rem',
-                        backgroundColor: copiedPartnerLink ? '#10b981' : 'var(--bg-secondary)',
-                        color: copiedPartnerLink ? 'white' : 'var(--text-primary)',
-                        border: '1px solid var(--border)',
-                        borderRadius: '6px',
-                        fontSize: '0.75rem',
-                        fontWeight: '600',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {copiedPartnerLink ? <Check size={13} /> : <Share2 size={13} />}
-                      {copiedPartnerLink ? '¡Enlace copiado!' : 'Copiar enlace'}
-                    </button>
+                    </div>
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.5rem' }}>
             <button
               onClick={() => checkAccounts()}
               disabled={syncing}
@@ -898,11 +1185,36 @@ export default function Channels() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '0.5rem'
+                gap: '0.4rem',
+                fontSize: '0.85rem'
               }}
             >
-              <RefreshCw size={16} className={syncing ? 'spin' : ''} />
+              <RefreshCw size={15} className={syncing ? 'spin' : ''} />
               {syncing ? 'Verificando...' : (isPartnerWhatsAppConnected ? 'Comprobar Estado' : '🔄 Ya lo vinculé / Comprobar')}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResetWhatsAppSession}
+              disabled={isResetting}
+              style={{
+                padding: '0.75rem 1rem',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                borderRadius: '8px',
+                color: '#ef4444',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.4rem',
+                fontSize: '0.8rem'
+              }}
+              title="Si el QR no responde o la cámara no lo toma, genera una nueva sesión limpia"
+            >
+              <RefreshCw size={14} className={isResetting ? 'spin' : ''} />
+              {isResetting ? 'Reiniciando...' : '🔄 Generar Nuevo QR'}
             </button>
           </div>
         </div>
@@ -1070,11 +1382,11 @@ export default function Channels() {
                 </div>
               </div>
               <span style={{ fontSize: '0.75rem', padding: '3px 8px', borderRadius: '6px', backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-                Zernio v1
+                Opcional
               </span>
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-              Recepción automática de mensajes provenientes de publicaciones y anuncios de la Fanpage oficial de Facebook.
+              Canal opcional para anuncios y publicaciones de Facebook Fanpage. WhatsApp e Instagram ya están 100% configurados y activos; no requiere ninguna acción adicional de tu parte.
             </p>
           </div>
           <button
@@ -1089,7 +1401,7 @@ export default function Channels() {
               fontWeight: '600'
             }}
           >
-            Próximo a activar (Paso 2)
+            Canal Opcional (Próximamente)
           </button>
         </div>
 
@@ -1143,6 +1455,298 @@ export default function Channels() {
         </div>
 
       </div>
+
+      {/* Modal QR Pantalla Completa */}
+      {showQrModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.85)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem'
+        }}>
+          <div style={{
+            backgroundColor: '#1a1d24',
+            border: '2px solid #6366f1',
+            borderRadius: '18px',
+            padding: '2rem 1.75rem',
+            maxWidth: '420px',
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            textAlign: 'center',
+            position: 'relative',
+            boxShadow: '0 16px 48px rgba(0,0,0,0.7)',
+            animation: 'fadeIn 0.25s ease-out'
+          }}>
+            <button
+              onClick={() => setShowQrModal(false)}
+              style={{
+                position: 'absolute',
+                top: '14px',
+                right: '14px',
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                borderRadius: '50%',
+                width: '32px',
+                height: '32px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title="Cerrar"
+            >
+              <X size={18} />
+            </button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem', color: '#818cf8' }}>
+              <QrIcon size={24} />
+              <h3 style={{ margin: 0, fontSize: '1.2rem', color: 'white', fontWeight: 'bold' }}>
+                Vincular WhatsApp Personal (Compañera)
+              </h3>
+            </div>
+
+            {/* Selector en el Modal */}
+            <div style={{ display: 'flex', gap: '0.4rem', width: '100%', marginBottom: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => setPartnerLinkMode('code')}
+                style={{
+                  flex: 1,
+                  padding: '0.5rem',
+                  borderRadius: '8px',
+                  fontSize: '0.8rem',
+                  fontWeight: 'bold',
+                  border: 'none',
+                  cursor: 'pointer',
+                  backgroundColor: partnerLinkMode === 'code' ? '#6366f1' : 'rgba(255, 255, 255, 0.08)',
+                  color: partnerLinkMode === 'code' ? 'white' : 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                <Smartphone size={15} /> Código de 8 Dígitos
+              </button>
+              <button
+                type="button"
+                onClick={() => setPartnerLinkMode('qr')}
+                style={{
+                  flex: 1,
+                  padding: '0.5rem',
+                  borderRadius: '8px',
+                  fontSize: '0.8rem',
+                  fontWeight: 'bold',
+                  border: 'none',
+                  cursor: 'pointer',
+                  backgroundColor: partnerLinkMode === 'qr' ? '#6366f1' : 'rgba(255, 255, 255, 0.08)',
+                  color: partnerLinkMode === 'qr' ? 'white' : 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                <QrIcon size={15} /> Escanear QR
+              </button>
+            </div>
+
+            {partnerLinkMode === 'code' ? (
+              <div style={{ width: '100%', marginBottom: '1.25rem' }}>
+                {pairingCode ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.85rem' }}>
+                    <div style={{
+                      backgroundColor: '#0f172a',
+                      border: '2px solid #6366f1',
+                      borderRadius: '14px',
+                      padding: '0.85rem 1.75rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '1rem',
+                      boxShadow: '0 4px 20px rgba(99, 102, 241, 0.4)'
+                    }}>
+                      <span style={{
+                        fontSize: '2.4rem',
+                        fontWeight: '900',
+                        letterSpacing: '5px',
+                        color: '#38bdf8',
+                        fontFamily: 'monospace'
+                      }}>
+                        {pairingCode}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(pairingCode.replace('-', ''));
+                          setCopiedPairingCode(true);
+                          setTimeout(() => setCopiedPairingCode(false), 3000);
+                        }}
+                        style={{
+                          padding: '0.45rem 0.8rem',
+                          backgroundColor: copiedPairingCode ? '#10b981' : '#6366f1',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontSize: '0.8rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem'
+                        }}
+                      >
+                        {copiedPairingCode ? <Check size={14} /> : <Share2 size={14} />}
+                        {copiedPairingCode ? '¡Copiado!' : 'Copiar'}
+                      </button>
+                    </div>
+
+                    <div style={{
+                      fontSize: '0.8rem',
+                      color: 'var(--text-secondary)',
+                      lineHeight: '1.45',
+                      backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                      padding: '0.85rem',
+                      borderRadius: '10px',
+                      width: '100%',
+                      textAlign: 'left',
+                      border: '1px solid rgba(99, 102, 241, 0.2)'
+                    }}>
+                      <strong style={{ color: 'white', display: 'block', marginBottom: '0.35rem' }}>
+                        📱 Pasos en el celular de tu compañera:
+                      </strong>
+                      1. Abre <strong>WhatsApp</strong> en su teléfono.<br />
+                      2. Toca <strong>⋮ o Ajustes &gt; Dispositivos vinculados</strong>.<br />
+                      3. Toca el botón verde <strong>"Vincular un dispositivo"</strong>.<br />
+                      4. Toca abajo la opción: <strong style={{ color: '#38bdf8' }}>"Vincular con el número de teléfono"</strong>.<br />
+                      5. Escribe este código: <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{pairingCode}</strong>.
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setPairingCode(null)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--text-secondary)',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        textDecoration: 'underline'
+                      }}
+                    >
+                      Ingresar otro número o generar nuevo código
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleRequestPairingCode} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', textAlign: 'left' }}>
+                    <label style={{ fontSize: '0.85rem', fontWeight: '600', color: '#a5b4fc' }}>
+                      Número de WhatsApp de tu compañera:
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        type="text"
+                        value={pairingPhone}
+                        onChange={(e) => setPairingPhone(e.target.value)}
+                        placeholder="Ej: 11 2345 6789 ó +54 9 11..."
+                        style={{
+                          flex: 1,
+                          padding: '0.65rem 0.85rem',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border)',
+                          backgroundColor: 'var(--bg-secondary)',
+                          color: 'var(--text-primary)',
+                          fontSize: '0.88rem'
+                        }}
+                      />
+                      <button
+                        type="submit"
+                        disabled={pairingLoading || !pairingPhone.trim()}
+                        style={{
+                          padding: '0.65rem 1rem',
+                          backgroundColor: '#6366f1',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '8px',
+                          fontWeight: 'bold',
+                          fontSize: '0.82rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {pairingLoading ? <RefreshCw className="spin" size={14} /> : <Sparkles size={14} />}
+                        {pairingLoading ? 'Generando...' : 'Obtener Código'}
+                      </button>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.3' }}>
+                      ✨ Ingresa este código en WhatsApp bajo <em>"Vincular con el número de teléfono"</em>. Sin usar cámara.
+                    </p>
+                    {pairingError && (
+                      <div style={{ color: '#ef4444', fontSize: '0.78rem' }}>
+                        ⚠️ {pairingError}
+                      </div>
+                    )}
+                  </form>
+                )}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: '0 0 1.25rem 0', lineHeight: '1.4' }}>
+                  Abre <strong>WhatsApp</strong> en el teléfono de tu compañera &gt; <strong>Dispositivos vinculados</strong> y apunta a este código QR:
+                </div>
+
+                <div style={{
+                  backgroundColor: '#ffffff',
+                  padding: '16px',
+                  borderRadius: '16px',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
+                  marginBottom: '1.25rem',
+                  display: 'inline-block'
+                }}>
+                  <QRCode value={activePartnerQr} size={230} />
+                </div>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                checkAccounts();
+                setShowQrModal(false);
+              }}
+              disabled={syncing}
+              style={{
+                width: '100%',
+                padding: '0.65rem',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                color: '#10b981',
+                fontSize: '0.85rem',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem'
+              }}
+            >
+              <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+              {syncing ? 'Verificando...' : '🔄 Ya lo vinculé / Comprobar'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
