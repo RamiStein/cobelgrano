@@ -1,0 +1,26 @@
+[
+  {
+    "date": "7/10/2026",
+    "memberId": "agustina",
+    "memberName": "Agustina",
+    "concept": "Gastos Generales",
+    "category": "Gastos Generales",
+    "currency": "ARS",
+    "amount": 100000,
+    "scope": "comunitario",
+    "channel": "whatsapp",
+    "timestamp": 1791400891899
+  },
+  {
+    "date": "7/10/2026",
+    "memberId": "agustina",
+    "memberName": "Agustina",
+    "concept": "Gastos Generales",
+    "category": "Gastos Generales",
+    "currency": "ARS",
+    "amount": 100000,
+    "scope": "comunitario",
+    "channel": "whatsapp",
+    "timestamp": 1791400843363
+  }
+]

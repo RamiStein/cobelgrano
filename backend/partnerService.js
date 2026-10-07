@@ -4,6 +4,8 @@ const { db } = require('./firebase');
 const { doc, setDoc, updateDoc, addDoc, collection, onSnapshot, getDocs, query, where, deleteDoc } = require('firebase/firestore');
 const classifierService = require('./classifierService');
 const whisperService = require('./whisperService');
+const bancaAbejaBotService = require('./bancaAbejaBotService');
+const dbLocal = require('./db');
 
 let client = null;
 let isReady = false;
@@ -11,6 +13,40 @@ let currentQr = null;
 let isInitializing = false;
 const chatTitleCache = new Map();
 let syncChatsInterval = null;
+
+const firestoreTimeout = (ms = 2500) => new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), ms));
+
+// Safe Firestore helpers that do not throw or hang on quota exhaustion
+async function safeSetDoc(docRef, data, options) {
+    try {
+        await Promise.race([setDoc(docRef, data, options), firestoreTimeout(2500)]);
+    } catch (err) {
+        if (err.code !== 'resource-exhausted' && err.message !== 'Firestore timeout') {
+            console.warn('[Firestore Write]', err.message);
+        }
+    }
+}
+
+async function safeAddDoc(collRef, data) {
+    try {
+        return await Promise.race([addDoc(collRef, data), firestoreTimeout(2500)]);
+    } catch (err) {
+        if (err.code !== 'resource-exhausted' && err.message !== 'Firestore timeout') {
+            console.warn('[Firestore Add]', err.message);
+        }
+        return null;
+    }
+}
+
+async function safeUpdateDoc(docRef, data) {
+    try {
+        await Promise.race([updateDoc(docRef, data), firestoreTimeout(2500)]);
+    } catch (err) {
+        if (err.code !== 'resource-exhausted' && err.message !== 'Firestore timeout') {
+            console.warn('[Firestore Update]', err.message);
+        }
+    }
+}
 
 const DESKTOP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -178,17 +214,33 @@ async function initPartnerService() {
             console.log(`[Partner WhatsApp] ${chatsData ? chatsData.length : 0} conversaciones recuperadas del navegador.`);
 
             let updatedCount = 0;
+            // 1. Guardar todos los títulos en caché de memoria para respuesta instantánea del Bot
             for (const item of (chatsData || [])) {
                 if (!item.id) continue;
                 const title = item.title;
                 if (title && title !== 'Grupo de WhatsApp') {
                     chatTitleCache.set(item.id, title);
                 }
+            }
+
+            // 2. Ordenar todas las conversaciones por timestamp DESC (más recientes primero)
+            const validChats = (chatsData || []).filter(c => c.id && c.timestamp > 0);
+            validChats.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+
+            const directChats = validChats.filter(c => !c.isGroup);
+            const groupChats = validChats.filter(c => c.isGroup);
+
+            // Priorizar 15 chats directos más activos + 8 grupos más activos
+            const chatsToSync = [...directChats.slice(0, 15), ...groupChats.slice(0, 8)];
+
+            for (const item of chatsToSync) {
+                if (!item.id) continue;
+                const title = item.title;
 
                 const contactPayload = {
                     id: item.id,
                     number: item.id.split('@')[0],
-                    lastActivity: item.timestamp || Math.floor(Date.now() / 1000),
+                    lastActivity: item.timestamp,
                     workspaceId: 'personal',
                     isGroup: item.isGroup,
                     channel: 'whatsapp_web'
@@ -205,10 +257,20 @@ async function initPartnerService() {
                     contactPayload.unreadCount = item.unreadCount;
                 }
 
-                await setDoc(doc(db, 'contacts', item.id), contactPayload, { merge: true });
+                // Guardar en Firestore con protección de cuota
+                await safeSetDoc(doc(db, 'contacts', item.id), contactPayload, { merge: true });
+                
+                // Guardar en SQLite local
+                try {
+                    dbLocal.run(
+                        `INSERT OR REPLACE INTO contacts (id, name, pushname, number) VALUES (?, ?, ?, ?)`,
+                        [item.id, contactPayload.name || null, contactPayload.pushname || null, contactPayload.number]
+                    );
+                } catch(e) {}
+
                 updatedCount++;
             }
-            console.log(`[Partner WhatsApp] Sincronización completada con éxito. ${updatedCount} chats y grupos actualizados con nombre y último mensaje en Firestore.`);
+            console.log(`[Partner WhatsApp] Sincronización completada. ${chatTitleCache.size} títulos en memoria, ${updatedCount} chats sincronizados (${directChats.slice(0, 15).length} directos, ${groupChats.slice(0, 8).length} grupos).`);
         } catch (err) {
             console.error('[Partner WhatsApp] Error en syncAllChats:', err.message || err);
         }
@@ -228,30 +290,25 @@ async function initPartnerService() {
             updatedAt: Date.now()
         };
 
-        try {
-            await setDoc(doc(db, 'system', 'partner_status'), payload, { merge: true });
-            await setDoc(doc(db, 'system', 'zernio_config'), {
-                partnerQr: null,
-                partnerStatus: 'connected',
-                partnerPhoneNumber: phone,
-                updatedAt: Date.now()
-            }, { merge: true });
-            console.log('[Partner WhatsApp] Estado CONECTADO actualizado en Firestore.');
-        } catch (e) {
-            console.error('[Partner WhatsApp] Error actualizando estado en Firestore:', e.message);
-        }
+        safeSetDoc(doc(db, 'system', 'partner_status'), payload, { merge: true });
+        safeSetDoc(doc(db, 'system', 'zernio_config'), {
+            partnerQr: null,
+            partnerStatus: 'connected',
+            partnerPhoneNumber: phone,
+            updatedAt: Date.now()
+        }, { merge: true });
+        console.log('[Partner WhatsApp] Estado CONECTADO actualizado en Firestore (async).');
 
-        // Sincronizar nombres reales de chats y grupos inmediatamente y tras unos segundos de warming
-        setTimeout(() => syncAllChats(), 2000);
-        setTimeout(() => syncAllChats(), 15000);
-        setTimeout(() => recoverPendingAudios(), 10000);
+        // Sincronizar nombres reales de chats y grupos tras warming
+        setTimeout(() => syncAllChats(), 5000);
+        setTimeout(() => recoverPendingAudios(), 12000);
 
         if (!syncChatsInterval) {
             syncChatsInterval = setInterval(() => {
                 if (isReady && client) {
                     syncAllChats();
                 }
-            }, 10 * 60 * 1000);
+            }, 30 * 60 * 1000);
         }
     });
 
@@ -348,36 +405,66 @@ async function initPartnerService() {
 
             console.log(`[Partner WhatsApp] Mensaje en [${sourceName}] de [${senderName}]: "${(msg.body || '').slice(0, 60)}"`);
 
-            // 1. Clasificación automática inteligente con IA/Reglas para el Organizador Personal
-            if (msg.body && msg.body.trim()) {
-                const note = classifierService.classifyMessage(msg.body, senderName, sourceName, 'personal', msg.from);
-                if (note) {
-                    console.log(`[Partner Organizer] 🎯 Auto-clasificado: [${note.category.toUpperCase()}] "${note.title}"`);
-                    await addDoc(collection(db, 'smart_notes'), {
-                        workspaceId: 'personal',
-                        category: note.category,
-                        title: note.title,
-                        originalText: note.originalText,
-                        sourceName: note.sourceName,
-                        senderName: note.senderName,
-                        chatId: msg.from,
-                        status: 'pendiente',
-                        priority: note.priority || 'media',
-                        intent: note.intent || 'general',
-                        subKeyword: note.subKeyword || null,
-                        timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
-                        createdAt: Date.now()
-                    });
+            // 🐝 1. BOT DE BANCA ABEJA: Ejecutar de inmediato y de forma completamente aislada
+            // Debe responder a WhatsApp aún si Firebase está temporalmente ocupado o sin cuota
+            try {
+                await bancaAbejaBotService.processMessage(msg, client);
+            } catch (botErr) {
+                console.error('[Banca Abeja Bot] Error procesando en partnerService:', botErr.message);
+            }
+
+            const serializedId = getSerializedId(msg.id);
+            const isAudio = (msg.type === 'ptt' || msg.type === 'audio');
+            const initialBody = msg.body || (isAudio ? '🎤 Nota de voz' : (msg.hasMedia ? '📷 Multimedia' : ''));
+
+            // 💾 2. Guardar en SQLite local de forma inmediata (sin depender de red ni cuotas)
+            if (serializedId) {
+                try {
+                    const isAudioInt = isAudio ? 1 : 0;
+                    const hasMediaInt = msg.hasMedia ? 1 : 0;
+                    const fromMeInt = msg.fromMe ? 1 : 0;
+                    dbLocal.run(
+                        `INSERT OR REPLACE INTO messages (id, fromMe, author, body, timestamp, type, hasMedia, isAudio, senderName) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [serializedId, fromMeInt, msg.from, initialBody, msg.timestamp || Math.floor(Date.now() / 1000), msg.type, hasMediaInt, isAudioInt, senderName]
+                    );
+                    dbLocal.run(
+                        `INSERT OR REPLACE INTO contacts (id, name, pushname, number) VALUES (?, ?, ?, ?)`,
+                        [msg.from, sourceName, senderName, msg.from.split('@')[0]]
+                    );
+                } catch (sqliteErr) {
+                    console.warn('[SQLite Local Save Error]', sqliteErr.message);
                 }
             }
 
-            // 2. Guardar mensaje en Firestore para el historial del Espacio Personal
-            const serializedId = getSerializedId(msg.id);
-            if (serializedId) {
-                const isAudio = (msg.type === 'ptt' || msg.type === 'audio');
-                const initialBody = msg.body || (isAudio ? '🎤 Nota de voz' : (msg.hasMedia ? '📷 Multimedia' : ''));
+            // 🧠 3. Clasificación inteligente con IA/Reglas para el Organizador Personal (Firestore protegido)
+            if (msg.body && msg.body.trim()) {
+                try {
+                    const note = classifierService.classifyMessage(msg.body, senderName, sourceName, 'personal', msg.from);
+                    if (note) {
+                        console.log(`[Partner Organizer] 🎯 Auto-clasificado: [${note.category.toUpperCase()}] "${note.title}"`);
+                        await safeAddDoc(collection(db, 'smart_notes'), {
+                            workspaceId: 'personal',
+                            category: note.category,
+                            title: note.title,
+                            originalText: note.originalText,
+                            sourceName: note.sourceName,
+                            senderName: note.senderName,
+                            chatId: msg.from,
+                            status: 'pendiente',
+                            priority: note.priority || 'media',
+                            intent: note.intent || 'general',
+                            subKeyword: note.subKeyword || null,
+                            timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
+                            createdAt: Date.now()
+                        });
+                    }
+                } catch(e) {}
+            }
 
-                await setDoc(doc(db, 'messages', serializedId), {
+            // ☁️ 4. Guardar mensaje y contacto en Firestore de manera segura
+            if (serializedId) {
+                await safeSetDoc(doc(db, 'messages', serializedId), {
                     id: serializedId,
                     fromMe: false,
                     author: msg.from,
@@ -419,7 +506,7 @@ async function initPartnerService() {
                     contactPayload.pushname = senderName;
                 }
 
-                await setDoc(doc(db, 'contacts', msg.from), contactPayload, { merge: true });
+                await safeSetDoc(doc(db, 'contacts', msg.from), contactPayload, { merge: true });
 
                 // Si es audio, descargarlo de inmediato y encolarlo para Whisper
                 if (isAudio && msg.hasMedia) {
@@ -441,11 +528,11 @@ async function initPartnerService() {
                 const media = await msg.downloadMedia();
                 if (media && media.data) {
                     const dataUrl = `data:${media.mimetype || 'audio/ogg; codecs=opus'};base64,${media.data}`;
-                    await updateDoc(doc(db, 'messages', serializedId), {
+                    await safeUpdateDoc(doc(db, 'messages', serializedId), {
                         mediaUrl: dataUrl,
                         mediaStatus: 'ready'
                     });
-                    console.log(`[Partner Audio] ✅ ¡Audio listo y guardado en Firestore para ${serializedId}!`);
+                    console.log(`[Partner Audio] ✅ ¡Audio listo para ${serializedId}!`);
 
                     // Encolar transcripción con Whisper
                     whisperService.queueTranscription({
@@ -455,7 +542,8 @@ async function initPartnerService() {
                         senderName,
                         sourceName,
                         chatId,
-                        workspaceId: 'personal'
+                        workspaceId: 'personal',
+                        client
                     });
                     return dataUrl;
                 }

@@ -12,22 +12,28 @@ function InstagramMiniIcon({ size = 14 }) {
 }
 
 function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
-  const [filterChannel, setFilterChannel] = useState('all'); // COB: 'all', 'whatsapp', 'instagram' | Personal: 'all', 'groups', 'direct'
+  const [filterChannel, setFilterChannel] = useState(() => {
+    return localStorage.getItem('chatlist_filter_' + workspace) || 'all';
+  });
   const [searchQuery, setSearchQuery] = useState('');
+
+  const handleSetFilter = (channel) => {
+    setFilterChannel(channel);
+    try {
+      localStorage.setItem('chatlist_filter_' + workspace, channel);
+    } catch(e) {}
+  };
 
   const isInstagramChat = (chat) => {
     return chat.channel === 'instagram' || chat.author?.startsWith('ig_') || chat.platform === 'instagram';
   };
 
   const isGroupChat = (chat) => {
-    return !!(chat.isGroup || chat.author?.includes('@g.us') || chat.contactId?.includes('@g.us') ||
-             (chat.name && (
-               chat.name.toLowerCase().includes('grupo') ||
-               chat.name.toLowerCase().includes('colegio') ||
-               chat.name.toLowerCase().includes('padres') ||
-               chat.name.toLowerCase().includes('mamis') ||
-               chat.name.toLowerCase().includes('familia')
-             )));
+    // Si tiene @c.us o @lid es indefectiblemente un contacto directo personal
+    if (chat.author?.includes('@c.us') || chat.author?.includes('@lid') || chat.contactId?.includes('@c.us') || chat.contactId?.includes('@lid')) {
+      return false;
+    }
+    return !!(chat.isGroup || chat.author?.includes('@g.us') || chat.contactId?.includes('@g.us'));
   };
 
   const isLid = (str) => {
@@ -204,7 +210,7 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
         {/* Filtros */}
         <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.6rem', width: '100%', boxSizing: 'border-box' }}>
           <button
-            onClick={() => setFilterChannel('all')}
+            onClick={() => handleSetFilter('all')}
             title={`Todos (${workspaceChats.length})`}
             style={{
               flex: 1,
@@ -228,7 +234,7 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
           {workspace === 'personal' ? (
             <>
               <button
-                onClick={() => setFilterChannel('groups')}
+                onClick={() => handleSetFilter('groups')}
                 title={`Grupos (${groupsCount})`}
                 style={{
                   flex: 1,
@@ -249,7 +255,7 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
                 Grupos ({groupsCount})
               </button>
               <button
-                onClick={() => setFilterChannel('direct')}
+                onClick={() => handleSetFilter('direct')}
                 title={`Directos (${directCount})`}
                 style={{
                   flex: 1,
@@ -273,7 +279,7 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
           ) : (
             <>
               <button
-                onClick={() => setFilterChannel('whatsapp')}
+                onClick={() => handleSetFilter('whatsapp')}
                 title={`WhatsApp (${whatsappCount})`}
                 style={{
                   flex: 1,
@@ -294,7 +300,7 @@ function ChatList({ chats, activeChat, setActiveChat, workspace = 'cob' }) {
                 WhatsApp ({whatsappCount})
               </button>
               <button
-                onClick={() => setFilterChannel('instagram')}
+                onClick={() => handleSetFilter('instagram')}
                 title={`Instagram (${instagramCount})`}
                 style={{
                   flex: 1,

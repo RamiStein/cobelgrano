@@ -233,7 +233,7 @@ function App() {
     });
 
     // Listen to contacts/chats list
-    const q = query(collection(db, 'contacts'), orderBy('lastActivity', 'desc'), limit(150));
+    const q = query(collection(db, 'contacts'), orderBy('lastActivity', 'desc'), limit(500));
     const unsubChats = onSnapshot(q, (snapshot) => {
       const chatsData = [];
       snapshot.forEach(docSnap => {

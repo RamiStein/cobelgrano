@@ -34,7 +34,7 @@ async function processQueue() {
     }
 }
 
-async function executeTranscription({ audioBase64, mimeType, msgId, senderName, sourceName, chatId, workspaceId }) {
+async function executeTranscription({ audioBase64, mimeType, msgId, senderName, sourceName, chatId, workspaceId, client }) {
     if (!audioBase64 || !msgId) return;
     const safeId = msgId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const inputPath = path.join(tempDir, `${safeId}_in.ogg`);
@@ -94,6 +94,24 @@ async function executeTranscription({ audioBase64, mimeType, msgId, senderName, 
                     createdAt: Date.now()
                 });
             }
+        }
+
+        // 6. Si el audio contiene gastos o consultas de Banca Abeja, procesar automáticamente
+        try {
+            const bancaAbejaBotService = require('./bancaAbejaBotService');
+            if (client && transcriptionText && bancaAbejaBotService.isBancaAbejaTrigger(transcriptionText, sourceName, chatId)) {
+                console.log(`[Whisper -> Banca Abeja] 🐝 Audio reconocido para Banca Abeja: "${transcriptionText}"`);
+                await bancaAbejaBotService.processDirect({
+                    text: transcriptionText,
+                    senderName,
+                    chatId,
+                    client,
+                    chatName: sourceName,
+                    isAudio: true
+                });
+            }
+        } catch (botErr) {
+            console.error('[Whisper -> Banca Abeja] Error procesando audio en bot:', botErr.message);
         }
     } catch (err) {
         console.error(`[WhisperService] Error en transcripción de ${safeId}:`, err.message);

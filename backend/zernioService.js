@@ -420,17 +420,21 @@ class ZernioService {
 
                 // Si la conversación no cambió, omitir escritura en Firestore
                 if (convUpdated > lastSynced || !this.syncedConversations.has(convId)) {
-                    await setDoc(doc(db, 'contacts', safeContactId), {
-                        number: participant,
-                        name: conv.participantName || (isIg ? `@${conv.participantUsername || participant}` : participant),
-                        pushname: conv.participantName || null,
-                        lastActivity: Math.floor((convUpdated || Date.now()) / 1000),
-                        zernioConversationId: convId,
-                        channel: isIg ? 'instagram' : 'whatsapp_cloud',
-                        platform: platform,
-                        workspaceId: workspaceId,
-                        isGroup: isGroup
-                    }, { merge: true });
+                    try {
+                        await setDoc(doc(db, 'contacts', safeContactId), {
+                            number: participant,
+                            name: conv.participantName || (isIg ? `@${conv.participantUsername || participant}` : participant),
+                            pushname: conv.participantName || null,
+                            lastActivity: Math.floor((convUpdated || Date.now()) / 1000),
+                            zernioConversationId: convId,
+                            channel: isIg ? 'instagram' : 'whatsapp_cloud',
+                            platform: platform,
+                            workspaceId: workspaceId,
+                            isGroup: isGroup
+                        }, { merge: true });
+                    } catch (e) {
+                        if (e.code !== 'resource-exhausted') console.warn('[Zernio Contact Write]', e.message);
+                    }
 
                     this.syncedConversations.set(convId, convUpdated);
                 }
@@ -449,24 +453,28 @@ class ZernioService {
                     const mediaUrl = m.attachments?.[0]?.url || null;
                     const senderDisplayName = isOutgoing ? 'Tú' : (m.senderName || conv.participantName || participant);
 
-                    await setDoc(doc(db, 'messages', m.id), {
-                        id: m.id,
-                        fromMe: isOutgoing,
-                        author: safeContactId,
-                        contactName: conv.participantName || participant,
-                        senderName: senderDisplayName,
-                        senderPhoneNumber: m.senderPhoneNumber || null,
-                        body: m.message || (isAudio ? 'Nota de voz' : ''),
-                        timestamp: Math.floor(new Date(m.createdAt || m.sentAt || Date.now()).getTime() / 1000),
-                        type: isAudio ? 'audio' : 'chat',
-                        hasMedia: !!mediaUrl,
-                        isAudio: isAudio,
-                        mediaUrl: mediaUrl,
-                        channel: isIg ? 'instagram' : 'whatsapp_cloud',
-                        platform: platform,
-                        workspaceId: workspaceId,
-                        isGroup: isGroup
-                    }, { merge: true });
+                    try {
+                        await setDoc(doc(db, 'messages', m.id), {
+                            id: m.id,
+                            fromMe: isOutgoing,
+                            author: safeContactId,
+                            contactName: conv.participantName || participant,
+                            senderName: senderDisplayName,
+                            senderPhoneNumber: m.senderPhoneNumber || null,
+                            body: m.message || (isAudio ? 'Nota de voz' : ''),
+                            timestamp: Math.floor(new Date(m.createdAt || m.sentAt || Date.now()).getTime() / 1000),
+                            type: isAudio ? 'audio' : 'chat',
+                            hasMedia: !!mediaUrl,
+                            isAudio: isAudio,
+                            mediaUrl: mediaUrl,
+                            channel: isIg ? 'instagram' : 'whatsapp_cloud',
+                            platform: platform,
+                            workspaceId: workspaceId,
+                            isGroup: isGroup
+                        }, { merge: true });
+                    } catch (e) {
+                        if (e.code !== 'resource-exhausted') console.warn('[Zernio Message Write]', e.message);
+                    }
 
                     this.knownMessageIds.add(m.id);
 

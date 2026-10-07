@@ -7,6 +7,7 @@ const { ref, uploadBytes, getDownloadURL } = require('firebase/storage');
 const qrcode = require('qrcode-terminal');
 const zernioService = require('./zernioService');
 const partnerService = require('./partnerService');
+const bancaAbejaBotService = require('./bancaAbejaBotService');
 
 process.on('unhandledRejection', (reason) => {
     console.error('[Process Handled Rejection]', reason?.message || reason);
@@ -168,6 +169,13 @@ async function start() {
             }
         } catch(e) {}
 
+        // 🐝 Bot de Banca Abeja (registro de gastos comunitarios y consulta de saldos)
+        try {
+            await bancaAbejaBotService.processMessage(msg, client);
+        } catch (botErr) {
+            console.error('[Banca Abeja Bot] Error procesando en index:', botErr.message);
+        }
+
         const msgData = {
             id: serializedId,
             fromMe: msg.fromMe,
@@ -182,7 +190,11 @@ async function start() {
             mediaUrl: null
         };
 
-        await setDoc(doc(db, "messages", serializedId), msgData);
+        try {
+            await setDoc(doc(db, "messages", serializedId), msgData);
+        } catch (e) {
+            if (e.code !== 'resource-exhausted') console.warn('[Firestore Write]', e.message);
+        }
 
         if (isAudio && hasMedia) {
             const safeId = serializedId.replace(/[^a-zA-Z0-9_-]/g, '_');
