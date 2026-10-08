@@ -108,13 +108,13 @@ function parseWhatsAppExpenses(rawText, defaultSenderName, defaultMemberId = 'am
                     category = 'Movilidad (Clio)';
                 } else if (/\betios\b/i.test(lowerClause)) {
                     category = 'Movilidad (Etios)';
-                } else if (/nafta|combustible|\bauto\b|gasoil/i.test(lowerClause)) {
+                } else if (/nafta|combustible|\bauto\b|gasoil|peaje|estacionamiento|remis|uber|cabify|taxi|colectivo|sube|gnc|taller|mec[aá]nic/i.test(lowerClause)) {
                     category = 'Movilidad';
-                } else if (/ferreter[ií]a|bomba|herramienta|huerta|tierra|obra/i.test(lowerClause)) {
+                } else if (/ferreter[ií]a|bomba|herramienta|huerta|tierra|obra|plomer|electric|pintur|limpieza|lavandina|jab[oó]n|gasista|mantenimiento/i.test(lowerClause)) {
                     category = 'Hábitat & Mantenimiento';
-                } else if (/\bluz\b|\bgas\b|\binternet\b|\bstarlink\b|\bagua\b|\bseguro\b/i.test(lowerClause)) {
+                } else if (/\bluz\b|\bgas\b|\binternet\b|\bstarlink\b|\bagua\b|\bseguro\b|edenor|metrogas|aysa|fibertel|personal|claro|movistar|abl|arba|expensas/i.test(lowerClause)) {
                     category = 'Servicios';
-                } else if (/alimento|verdur|comida|arepa|s[uú]per|\bpan\b/i.test(lowerClause)) {
+                } else if (/alimento|verdu|frut|comida|arepa|s[uú]per|carn|pollo|panader|diet[eé]tica|\bpan\b|\bleche\b|\bhuevo|almac[eé]n|mercado|queso/i.test(lowerClause)) {
                     category = 'Despensa & Alimentos';
                 }
 
@@ -180,6 +180,9 @@ class BancaAbejaBotService {
     // Evaluación Inteligente de Disparadores (Triggers)
     checkTrigger({ text, chatName, chatId, senderName, memberId, isKnownMember }) {
         if (!text) return null;
+        // Evitar que el bot reaccione a sus propios mensajes de confirmación o reportes
+        if (text.startsWith('🐝') || text.startsWith('📊') || text.startsWith('⚠️')) return null;
+
         const lower = text.toLowerCase().trim();
         const lowerChat = (chatName || '').toLowerCase();
 
@@ -217,7 +220,7 @@ class BancaAbejaBotService {
             }
         }
 
-        // 5. Miembros conocidos de la Colmena (Agustina, Cristian, Ramiro) en chat personal
+        // 5. Miembros conocidos de la Colmena (Agustina, Cristian, Ramiro) en chat personal o propio
         // Si mandan un mensaje directo de gasto con monto o verbo
         if (isKnownMember) {
             const verbWithAmount = /^(gast[eé]|puse|compr[eé]|pagu[eé])\b.*?\d+/i.test(lower);
@@ -235,71 +238,85 @@ class BancaAbejaBotService {
         return null;
     }
 
-    isBancaAbejaTrigger(text, chatName = '', chatId = null) {
-        return !!this.checkTrigger({ text, chatName, chatId });
+    isBancaAbejaTrigger(text, chatName = '', chatId = null, senderName = '') {
+        const allIdentifiers = [senderName, chatId].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
+        const isKnownMember = allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598') ||
+                              allIdentifiers.includes('cristian') || allIdentifiers.includes('cris') || allIdentifiers.includes('ferreyra') ||
+                              allIdentifiers.includes('ramiro') || allIdentifiers.includes('rami') || allIdentifiers.includes('27452476');
+        return !!this.checkTrigger({ text, chatName, chatId, senderName, isKnownMember });
     }
 
     async processMessage(msg, client) {
         if (!msg || !msg.body) return;
         const text = msg.body.trim();
 
+        // Chat de destino para la respuesta (si es fromMe, responder a msg.to)
+        const chatJid = msg.fromMe ? (msg.to || msg.from) : msg.from;
+
         let chatName = 'Directo';
         try {
             const chat = await msg.getChat();
-            chatName = chat?.name || chat?.formattedTitle || (msg.from?.includes('@g.us') ? 'Grupo' : 'Directo');
+            chatName = chat?.name || chat?.formattedTitle || (chatJid.includes('@g.us') ? 'Grupo' : 'Directo');
         } catch(e) {}
 
         // Determinar remitente (nombre, número y pertenencia a la comunidad)
         let senderName = 'Amigo';
         let memberId = 'amigo';
         let isKnownMember = false;
-        const senderJid = msg.author || msg.from || '';
-        const senderNumber = senderJid ? senderJid.split('@')[0] : '';
 
-        try {
-            let contact = null;
-            if (client && typeof client.getContactById === 'function') {
-                try { contact = await client.getContactById(senderJid); } catch(e) {}
-            }
-            if (!contact && typeof msg.getContact === 'function') {
-                try { contact = await msg.getContact(); } catch(e) {}
-            }
-            const notifyName = (msg._data && msg._data.notifyName) || null;
-            senderName = contact?.name || contact?.pushname || notifyName || senderNumber;
+        if (msg.fromMe) {
+            senderName = 'Ramiro';
+            memberId = 'ramiro';
+            isKnownMember = true;
+        } else {
+            const senderJid = msg.author || msg.from || '';
+            const senderNumber = senderJid ? senderJid.split('@')[0] : '';
 
-            const allIdentifiers = [
-                senderJid,
-                senderNumber,
-                senderName,
-                msg.from,
-                msg.author,
-                contact?.number,
-                contact?.name,
-                contact?.pushname,
-                notifyName
-            ].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
+            try {
+                let contact = null;
+                if (client && typeof client.getContactById === 'function') {
+                    try { contact = await client.getContactById(senderJid); } catch(e) {}
+                }
+                if (!contact && typeof msg.getContact === 'function') {
+                    try { contact = await msg.getContact(); } catch(e) {}
+                }
+                const notifyName = (msg._data && msg._data.notifyName) || null;
+                senderName = contact?.name || contact?.pushname || notifyName || senderNumber;
 
-            if (allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598') || allIdentifiers.includes('183412300230685')) {
-                senderName = 'Agustina';
-                memberId = 'agustina';
-                isKnownMember = true;
-            } else if (allIdentifiers.includes('cristian') || allIdentifiers.includes('cris') || allIdentifiers.includes('ferreyra') || allIdentifiers.includes('49748673310966')) {
-                senderName = 'Cristian';
-                memberId = 'cristian';
-                isKnownMember = true;
-            } else if (allIdentifiers.includes('ramiro') || allIdentifiers.includes('rami') || allIdentifiers.includes('27452476')) {
-                senderName = 'Ramiro';
-                memberId = 'ramiro';
-                isKnownMember = true;
-            } else {
-                memberId = senderName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-            }
-        } catch(e) {}
+                const allIdentifiers = [
+                    senderJid,
+                    senderNumber,
+                    senderName,
+                    msg.from,
+                    msg.author,
+                    contact?.number,
+                    contact?.name,
+                    contact?.pushname,
+                    notifyName
+                ].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
+
+                if (allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598') || allIdentifiers.includes('183412300230685')) {
+                    senderName = 'Agustina';
+                    memberId = 'agustina';
+                    isKnownMember = true;
+                } else if (allIdentifiers.includes('cristian') || allIdentifiers.includes('cris') || allIdentifiers.includes('ferreyra') || allIdentifiers.includes('49748673310966')) {
+                    senderName = 'Cristian';
+                    memberId = 'cristian';
+                    isKnownMember = true;
+                } else if (allIdentifiers.includes('ramiro') || allIdentifiers.includes('rami') || allIdentifiers.includes('27452476')) {
+                    senderName = 'Ramiro';
+                    memberId = 'ramiro';
+                    isKnownMember = true;
+                } else {
+                    memberId = senderName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+                }
+            } catch(e) {}
+        }
 
         const trigger = this.checkTrigger({
             text,
             chatName,
-            chatId: msg.from,
+            chatId: chatJid,
             senderName,
             memberId,
             isKnownMember
@@ -309,11 +326,11 @@ class BancaAbejaBotService {
             return;
         }
 
-        console.log(`[Banca Abeja Bot] 🐝 Disparador [${trigger}] en [${chatName}] de [${senderName}]: "${text}"`);
+        console.log(`[Banca Abeja Bot] 🐝 Disparador [${trigger}] en [${chatName}] de [${senderName}] (fromMe: ${!!msg.fromMe}): "${text}"`);
 
         // Caso A: Activar Sesión
         if (trigger === 'ACTIVATE') {
-            this.activateSession(msg.from, senderName, 2);
+            this.activateSession(chatJid, senderName, 2);
             const activateMsg = `🐝 *¡Modo Banca Abeja ACTIVADO!*
 Este chat quedó habilitado durante *2 horas* para registrar gastos y consultar saldos.
 
@@ -324,16 +341,16 @@ Este chat quedó habilitado durante *2 horas* para registrar gastos y consultar 
 • *Para pausar:* _/desactivar_ o _/pausar_
 
 🌐 Panel en vivo: https://bancaabeja.org`;
-            await client.sendMessage(msg.from, activateMsg);
+            await client.sendMessage(chatJid, activateMsg);
             return;
         }
 
         // Caso B: Desactivar Sesión
         if (trigger === 'DEACTIVATE') {
-            this.deactivateSession(msg.from);
+            this.deactivateSession(chatJid);
             const pauseMsg = `🐝 *Modo Banca Abeja PAUSADO.*
 El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier momento escribiendo */activar* o anteponiendo *#abeja* a tu gasto.`;
-            await client.sendMessage(msg.from, pauseMsg);
+            await client.sendMessage(chatJid, pauseMsg);
             return;
         }
 
@@ -351,13 +368,13 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
   • O con prefijo rápido: _"#abeja gasté 100.000"_
 
 🌐 Panel y balances en vivo: https://bancaabeja.org`;
-            await client.sendMessage(msg.from, helpMsg);
+            await client.sendMessage(chatJid, helpMsg);
             return;
         }
 
         // Caso D: Balance
         if (trigger === 'BALANCE') {
-            await this.handleBalanceQuery(msg.from, client);
+            await this.handleBalanceQuery(chatJid, client);
             return;
         }
 
@@ -365,8 +382,8 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
         if (trigger === 'EXPENSE' || trigger === 'DIRECT_EXPENSE') {
             const parsedItems = parseWhatsAppExpenses(text, senderName, memberId);
             if (parsedItems.length > 0) {
-                const isSession = this.isSessionActive(msg.from);
-                await this.handleRegisterExpenses(msg.from, client, parsedItems, senderName, memberId, false, isSession);
+                const isSession = this.isSessionActive(chatJid);
+                await this.handleRegisterExpenses(chatJid, client, parsedItems, senderName, memberId, false, isSession);
             }
         }
     }

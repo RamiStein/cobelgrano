@@ -518,6 +518,81 @@ async function initPartnerService() {
         }
     });
 
+    // Procesar mensajes salientes del propio usuario (Ramiro escribiendo desde su celular a sí mismo o en grupos)
+    client.on('message_create', async (msg) => {
+        try {
+            if (msg.isStatus || msg.from === 'status@broadcast' || msg.to === 'status@broadcast') return;
+            // Solo procesar en message_create los que son fromMe (los que envía el dueño de la sesión)
+            // Ya que los entrantes (!fromMe) son procesados por el listener 'message'
+            if (!msg.fromMe) return;
+
+            // Ignorar respuestas automáticas generadas por el bot
+            if (msg.body && (msg.body.startsWith('🐝') || msg.body.startsWith('📊') || msg.body.startsWith('⚠️'))) {
+                return;
+            }
+
+            const chatJid = msg.to || msg.from;
+            const isGroup = !!(chatJid && chatJid.includes('@g.us'));
+            let sourceName = 'Chat Personal';
+            if (isGroup) {
+                sourceName = chatTitleCache.get(chatJid) || 'Grupo de WhatsApp';
+            }
+
+            // 🐝 1. BOT DE BANCA ABEJA: Procesar gastos o consultas salientes de Ramiro
+            try {
+                await bancaAbejaBotService.processMessage(msg, client);
+            } catch (botErr) {
+                console.error('[Banca Abeja Bot] Error en message_create:', botErr.message);
+            }
+
+            const serializedId = getSerializedId(msg.id);
+            const isAudio = (msg.type === 'ptt' || msg.type === 'audio');
+            const initialBody = msg.body || (isAudio ? '🎤 Nota de voz' : (msg.hasMedia ? '📷 Multimedia' : ''));
+
+            // 💾 2. Guardar en SQLite local
+            if (serializedId) {
+                try {
+                    const isAudioInt = isAudio ? 1 : 0;
+                    const hasMediaInt = msg.hasMedia ? 1 : 0;
+                    dbLocal.run(
+                        `INSERT OR REPLACE INTO messages (id, fromMe, author, body, timestamp, type, hasMedia, isAudio, senderName) 
+                         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+                        [serializedId, chatJid, initialBody, msg.timestamp || Math.floor(Date.now() / 1000), msg.type, hasMediaInt, isAudioInt, 'Ramiro']
+                    );
+                } catch (sqliteErr) {
+                    console.warn('[SQLite Local Save Error (message_create)]', sqliteErr.message);
+                }
+            }
+
+            // ☁️ 3. Guardar en Firestore protegido
+            if (serializedId) {
+                await safeSetDoc(doc(db, 'messages', serializedId), {
+                    id: serializedId,
+                    fromMe: true,
+                    author: chatJid,
+                    contactName: sourceName,
+                    senderName: 'Ramiro',
+                    body: initialBody,
+                    timestamp: msg.timestamp || Math.floor(Date.now() / 1000),
+                    type: msg.type,
+                    hasMedia: msg.hasMedia,
+                    isAudio,
+                    mediaUrl: null,
+                    mediaStatus: isAudio ? 'downloading' : null,
+                    workspaceId: 'personal',
+                    isGroup
+                });
+
+                // Si es audio de Ramiro, descargarlo y enviarlo a Whisper
+                if (isAudio && msg.hasMedia) {
+                    downloadAndProcessAudio(msg, serializedId, sourceName, 'Ramiro', chatJid);
+                }
+            }
+        } catch (err) {
+            console.error('[Partner WhatsApp] Error procesando message_create:', err.message);
+        }
+    });
+
     async function downloadAndProcessAudio(msg, serializedId, sourceName, senderName, chatId, maxRetries = 4) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {

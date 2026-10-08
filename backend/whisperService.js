@@ -99,7 +99,7 @@ async function executeTranscription({ audioBase64, mimeType, msgId, senderName, 
         // 6. Si el audio contiene gastos o consultas de Banca Abeja, procesar automáticamente
         try {
             const bancaAbejaBotService = require('./bancaAbejaBotService');
-            if (client && transcriptionText && bancaAbejaBotService.isBancaAbejaTrigger(transcriptionText, sourceName, chatId)) {
+            if (client && transcriptionText && bancaAbejaBotService.isBancaAbejaTrigger(transcriptionText, sourceName, chatId, senderName)) {
                 console.log(`[Whisper -> Banca Abeja] 🐝 Audio reconocido para Banca Abeja: "${transcriptionText}"`);
                 await bancaAbejaBotService.processDirect({
                     text: transcriptionText,
