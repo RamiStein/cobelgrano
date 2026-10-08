@@ -84,6 +84,12 @@ function parseWhatsAppExpenses(rawText, defaultSenderName, defaultMemberId = 'am
     let text = rawText.trim().replace(/^(#abeja|banca abeja|abeja|\/gasto)\s*/i, '');
     if (!text.trim()) return [];
 
+    // Descartar si el texto parece base64 (thumbnails de mapas/fotos) o es anormalmente largo
+    if (text.length > 250) return [];
+    if (text.startsWith('/j/') || text.startsWith('/9j/') || text.startsWith('data:') || /^[\w+/=]{50,}$/.test(text.replace(/\s+/g, ''))) {
+        return [];
+    }
+
     const parseAmount = (str) => {
         if (!str) return 0;
         let s = str.trim().toLowerCase();
@@ -212,15 +218,21 @@ class BancaAbejaBotService {
     }
 
     // Evaluación Inteligente de Disparadores (Triggers)
-    checkTrigger({ text, chatName, chatId, senderName, memberId, isKnownMember }) {
+    checkTrigger({ text, chatName, chatId, senderName, memberId, isKnownMember, isCommunityChat, isSelfChat, isTargetMember, isDirectBotChat }) {
         if (!text) return null;
         // Evitar que el bot reaccione a sus propios mensajes de confirmación o reportes
         if (text.startsWith('🐝') || text.startsWith('📊') || text.startsWith('⚠️')) return null;
 
+        // Descartar si el texto parece base64 (thumbnails de mapas/fotos) o es anormalmente largo
+        if (text.length > 250) return null;
+        if (text.startsWith('/j/') || text.startsWith('/9j/') || text.startsWith('data:') || /^[\w+/=]{50,}$/.test(text.replace(/\s+/g, ''))) {
+            return null;
+        }
+
         const lower = text.toLowerCase().trim();
         const lowerChat = (chatName || '').toLowerCase();
 
-        // 1. Comandos de Activación / Desactivación / Ayuda
+        // 1. Comandos de Activación / Desactivación / Ayuda (funcionan en cualquier chat)
         if (/^\/(activar|iniciar|on)\b/i.test(lower) || lower === 'activar' || lower === 'activar abeja' || lower === 'iniciar abeja' || lower === 'banca abeja on') {
             return 'ACTIVATE';
         }
@@ -239,24 +251,24 @@ class BancaAbejaBotService {
             return 'BALANCE';
         }
 
-        // 3. Grupos Comunitarios (Permanentemente Activos)
-        const isCommunityChat = lowerChat.includes('banca') || lowerChat.includes('abeja') || lowerChat.includes('colmena') || lowerChat.includes('casa') || lowerChat.includes('comunidad') || lowerChat.includes('hogar') || lowerChat.includes('gastos');
-
-        // 4. Sesión Activa en chat directo
+        // 3. Sesión Activa en este chat (habilitada previamente con /activar)
         const isSession = this.isSessionActive(chatId);
 
-        if (isCommunityChat || isSession) {
+        // 4. Ámbitos autorizados para interpretación natural sin comando explícito:
+        // - Grupos comunitarios (banca, colmena, gastos, etc.)
+        // - Sesión activa durante 2 horas en el chat
+        // - Chat de notas personales de Ramiro consigo mismo (self chat)
+        // - Chat directo de un miembro (Agustina, Cristian) con el bot
+        // - Chat directo entre Ramiro y otro miembro de la colmena
+        const isAuthorizedContext = isCommunityChat || isSession || isSelfChat || isDirectBotChat || isTargetMember;
+
+        // Si NO es un ámbito autorizado (ej: chat personal con un amigo, paciente o grupo externo),
+        // el bot NUNCA interfiere en la conversación a menos que se use un comando explícito (#abeja, /activar).
+        if (isAuthorizedContext) {
             if (/^(saldo|saldos|cuentas|resumen|\?cu[aá]nto debemos|\?c[oó]mo estamos|como estamos|cómo estamos)/i.test(lower)) {
                 return 'BALANCE';
             }
-            if (/\d+/.test(lower) && (/gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó]/i.test(lower) || /mil|k\b/i.test(lower))) {
-                return 'EXPENSE';
-            }
-        }
 
-        // 5. Miembros conocidos de la Colmena (Agustina, Cristian, Ramiro) en chat personal o propio
-        // Si mandan un mensaje directo de gasto con monto o verbo
-        if (isKnownMember) {
             const verbWithAmount = /^(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó])\b.*?\d+/i.test(lower);
             const amountWithConcept = /^\$?\d+[\d.,]*\s*(k|mil)?\s*(?:en|para|de|con\s+)?\b/i.test(lower);
             const generalExpense = (
@@ -267,13 +279,11 @@ class BancaAbejaBotService {
             ) && /\d+/.test(lower);
 
             // Reconocimiento de monto + rubro directo (ej: "25000 verduleria" o "30000 nafta")
-            const hasAmountAndCategory = /\d+/.test(lower) && /verdu|frut|carn|pollo|panader|alimento|comida|super|súper|nafta|clio|etios|ferreter|internet|luz|gas/i.test(lower);
+            // Usamos \bgas\b para evitar falsos positivos con palabras que contengan "gas"
+            const hasAmountAndCategory = /\d+/.test(lower) && /verdu|frut|carn|pollo|panader|alimento|comida|super|súper|nafta|clio|etios|ferreter|internet|luz|\bgas\b/i.test(lower);
 
             if (verbWithAmount || amountWithConcept || generalExpense || hasAmountAndCategory) {
                 return 'EXPENSE';
-            }
-            if (/^(saldo|saldos|cuentas|balance)$/i.test(lower)) {
-                return 'BALANCE';
             }
         }
 
@@ -289,12 +299,44 @@ class BancaAbejaBotService {
             if (mName && mName.length >= 3 && allIdentifiers.includes(mName)) return true;
             return false;
         }) || allIdentifiers.includes('agustina') || allIdentifiers.includes('cristian') || allIdentifiers.includes('ramiro');
-        return !!this.checkTrigger({ text, chatName, chatId, senderName, isKnownMember });
+        const isCommunityChat = (chatName || '').toLowerCase().match(/banca|abeja|colmena|gastos/);
+        return !!this.checkTrigger({ 
+            text, 
+            chatName, 
+            chatId, 
+            senderName, 
+            isKnownMember, 
+            isCommunityChat, 
+            isSelfChat: false, 
+            isTargetMember: false, 
+            isDirectBotChat: isKnownMember 
+        });
     }
 
     async processMessage(msg, client) {
-        if (!msg || !msg.body) return;
-        const text = msg.body.trim();
+        if (!msg) return;
+
+        // 1. Filtrar tipos de mensajes que no son texto directo
+        if (msg.type && msg.type !== 'chat') {
+            // Si es imagen/video/documento, solo procesar si el usuario le puso caption/texto
+            if ((msg.type === 'image' || msg.type === 'video' || msg.type === 'document') && msg.caption) {
+                // ok, procesar caption
+            } else {
+                // Ubicaciones ('location'), stickers, llamadas, audio no transcripto, etc. se ignoran
+                return;
+            }
+        }
+
+        const rawText = msg.caption || msg.body;
+        if (!rawText || typeof rawText !== 'string') return;
+        const text = rawText.trim();
+        if (!text) return;
+
+        // 2. Descartar base64 y mensajes gigantes
+        if (text.length > 250) return;
+        if (text.startsWith('/j/') || text.startsWith('/9j/') || text.startsWith('data:') || /^[\w+/=]{50,}$/.test(text.replace(/\s+/g, ''))) {
+            return;
+        }
 
         // Chat de destino para la respuesta (si es fromMe, responder a msg.to)
         const chatJid = msg.fromMe ? (msg.to || msg.from) : msg.from;
@@ -305,7 +347,10 @@ class BancaAbejaBotService {
             chatName = chat?.name || chat?.formattedTitle || (chatJid.includes('@g.us') ? 'Grupo' : 'Directo');
         } catch(e) {}
 
-        // Determinar remitente (nombre, número y pertenencia a la comunidad)
+        const lowerChat = (chatName || '').toLowerCase();
+        const isGroup = !!(chatJid && chatJid.includes('@g.us'));
+
+        // Cargar miembros registrados
         const registeredMembers = await getRegisteredMembers();
         let senderName = 'Amigo';
         let memberId = 'amigo';
@@ -378,13 +423,40 @@ class BancaAbejaBotService {
             } catch(e) {}
         }
 
+        // Determinar tipo de contexto del chat
+        const isCommunityChat = isGroup && (
+            lowerChat.includes('banca') || lowerChat.includes('abeja') || 
+            lowerChat.includes('colmena') || lowerChat.includes('gastos')
+        );
+
+        // Chat de Ramiro consigo mismo (Note to self / Mensajes guardados)
+        const isSelfChat = msg.fromMe && (
+            chatJid.includes('27452476') || 
+            chatJid === msg.from || 
+            (msg.to && msg.from && msg.to.split('@')[0] === msg.from.split('@')[0])
+        );
+
+        // Chat directo de un miembro hacia el bot
+        const isDirectBotChat = !msg.fromMe && !isGroup && isKnownMember;
+
+        // Chat directo de Ramiro hacia otro miembro de la colmena
+        const isTargetMember = msg.fromMe && !isGroup && registeredMembers.some(m => {
+            if (m.id === 'ramiro') return false;
+            const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
+            return cPhone && cPhone.length >= 8 && chatJid.includes(cPhone.slice(-8));
+        });
+
         const trigger = this.checkTrigger({
             text,
             chatName,
             chatId: chatJid,
             senderName,
             memberId,
-            isKnownMember
+            isKnownMember,
+            isCommunityChat,
+            isSelfChat,
+            isTargetMember,
+            isDirectBotChat
         });
 
         if (!trigger) {
