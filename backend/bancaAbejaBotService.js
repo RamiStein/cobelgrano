@@ -43,6 +43,39 @@ function saveSessions(sessionsObj) {
     } catch(e) {}
 }
 
+// Carga y sincronización dinámica de miembros de Banca Abeja (Firestore banca_abeja_members)
+let membersCache = [];
+let lastMembersFetch = 0;
+
+async function getRegisteredMembers() {
+    if (Date.now() - lastMembersFetch < 20000 && membersCache.length > 0) {
+        return membersCache;
+    }
+    try {
+        const snap = await Promise.race([
+            getDocs(collection(db, 'banca_abeja_members')),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500))
+        ]);
+        const list = [];
+        snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+        if (list.length > 0) {
+            membersCache = list;
+            lastMembersFetch = Date.now();
+            return list;
+        }
+    } catch(e) {}
+
+    // Fallback con miembros conocidos de la colmena
+    if (membersCache.length === 0) {
+        membersCache = [
+            { id: 'ramiro', name: 'Ramiro', phone: '+54 9 11 2745-2476', cleanPhone: '5491127452476' },
+            { id: 'agustina', name: 'Agustina', phone: '+54 9 11 2649-5598', cleanPhone: '5491126495598' },
+            { id: 'cristian', name: 'Cristian', phone: '+54 9 11 4974-8673', cleanPhone: '5491149748673' }
+        ];
+    }
+    return membersCache;
+}
+
 // ==========================================
 // PARSER DE GASTOS COLOQUIALES PARA WHATSAPP
 // ==========================================
@@ -240,9 +273,13 @@ class BancaAbejaBotService {
 
     isBancaAbejaTrigger(text, chatName = '', chatId = null, senderName = '') {
         const allIdentifiers = [senderName, chatId].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
-        const isKnownMember = allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598') ||
-                              allIdentifiers.includes('cristian') || allIdentifiers.includes('cris') || allIdentifiers.includes('ferreyra') ||
-                              allIdentifiers.includes('ramiro') || allIdentifiers.includes('rami') || allIdentifiers.includes('27452476');
+        const isKnownMember = (membersCache || []).some(m => {
+            const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
+            if (cPhone && cPhone.length >= 8 && allIdentifiers.includes(cPhone.slice(-8))) return true;
+            const mName = (m.name || '').toLowerCase().trim();
+            if (mName && mName.length >= 3 && allIdentifiers.includes(mName)) return true;
+            return false;
+        }) || allIdentifiers.includes('agustina') || allIdentifiers.includes('cristian') || allIdentifiers.includes('ramiro');
         return !!this.checkTrigger({ text, chatName, chatId, senderName, isKnownMember });
     }
 
@@ -260,6 +297,7 @@ class BancaAbejaBotService {
         } catch(e) {}
 
         // Determinar remitente (nombre, número y pertenencia a la comunidad)
+        const registeredMembers = await getRegisteredMembers();
         let senderName = 'Amigo';
         let memberId = 'amigo';
         let isKnownMember = false;
@@ -268,6 +306,8 @@ class BancaAbejaBotService {
             senderName = 'Ramiro';
             memberId = 'ramiro';
             isKnownMember = true;
+            const ramiroMem = registeredMembers.find(m => m.id === 'ramiro');
+            if (ramiroMem) senderName = ramiroMem.name;
         } else {
             const senderJid = msg.author || msg.from || '';
             const senderNumber = senderJid ? senderJid.split('@')[0] : '';
@@ -295,7 +335,23 @@ class BancaAbejaBotService {
                     notifyName
                 ].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
 
-                if (allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598') || allIdentifiers.includes('183412300230685')) {
+                // 🔍 Búsqueda dinámica en los miembros dados de alta
+                const matched = registeredMembers.find(m => {
+                    const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
+                    if (cPhone && cPhone.length >= 8) {
+                        const last8 = cPhone.slice(-8);
+                        if (allIdentifiers.includes(last8)) return true;
+                    }
+                    const mName = (m.name || '').toLowerCase().trim();
+                    if (mName && mName.length >= 3 && allIdentifiers.includes(mName)) return true;
+                    return false;
+                });
+
+                if (matched) {
+                    senderName = matched.name;
+                    memberId = matched.id;
+                    isKnownMember = true;
+                } else if (allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598')) {
                     senderName = 'Agustina';
                     memberId = 'agustina';
                     isKnownMember = true;
@@ -392,11 +448,27 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
     async processDirect({ text, senderName = 'Amigo', memberId = 'amigo', chatId, client, chatName = '', isAudio = false }) {
         if (!text || !chatId || !client) return;
 
+        const registeredMembers = await getRegisteredMembers();
         let resolvedMemberId = memberId;
         const allIdentifiers = [senderName, chatId, memberId].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
         let isKnownMember = false;
 
-        if (allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598') || allIdentifiers.includes('183412300230685')) {
+        const matched = registeredMembers.find(m => {
+            const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
+            if (cPhone && cPhone.length >= 8) {
+                const last8 = cPhone.slice(-8);
+                if (allIdentifiers.includes(last8)) return true;
+            }
+            const mName = (m.name || '').toLowerCase().trim();
+            if (mName && mName.length >= 3 && allIdentifiers.includes(mName)) return true;
+            return false;
+        });
+
+        if (matched) {
+            senderName = matched.name;
+            resolvedMemberId = matched.id;
+            isKnownMember = true;
+        } else if (allIdentifiers.includes('agustina') || allIdentifiers.includes('sol solar') || allIdentifiers.includes('26495598')) {
             senderName = 'Agustina';
             resolvedMemberId = 'agustina';
             isKnownMember = true;
