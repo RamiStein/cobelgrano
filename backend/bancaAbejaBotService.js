@@ -154,8 +154,9 @@ function parseWhatsAppExpenses(rawText, defaultSenderName, defaultMemberId = 'am
                 let concept = clause
                     .replace(rawNumStr, '')
                     .replace(/^(#abeja|banca abeja|abeja|\/gasto)\s+/i, '')
-                    .replace(/^(gast[eé]\s+en|gast[eé]|puse\s+para|puse|compr[eé]\s+en|compr[eé]|pagu[eé]\s+en|pagu[eé]|para|en|de)\s+/i, '')
-                    .replace(/\s+(con|para|en)$/i, '')
+                    .replace(/\b(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó])\b\s*(?:en|para|de)?\s*/gi, '')
+                    .replace(/^(para|en|de|con)\s+/i, '')
+                    .replace(/\s+(con|para|en|de)$/i, '')
                     .replace(/\s*(usd|dolares|dólares|u\$s|pesos|abejas|horas)\s*/gi, '')
                     .trim();
 
@@ -248,7 +249,7 @@ class BancaAbejaBotService {
             if (/^(saldo|saldos|cuentas|resumen|\?cu[aá]nto debemos|\?c[oó]mo estamos|como estamos|cómo estamos)/i.test(lower)) {
                 return 'BALANCE';
             }
-            if (/\d+/.test(lower) && (/gast[eé]|puse|compr[eé]|pagu[eé]/i.test(lower) || /mil|k\b/i.test(lower))) {
+            if (/\d+/.test(lower) && (/gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó]/i.test(lower) || /mil|k\b/i.test(lower))) {
                 return 'EXPENSE';
             }
         }
@@ -256,11 +257,19 @@ class BancaAbejaBotService {
         // 5. Miembros conocidos de la Colmena (Agustina, Cristian, Ramiro) en chat personal o propio
         // Si mandan un mensaje directo de gasto con monto o verbo
         if (isKnownMember) {
-            const verbWithAmount = /^(gast[eé]|puse|compr[eé]|pagu[eé])\b.*?\d+/i.test(lower);
-            const amountWithConcept = /^\$?\d+[\d.,]*\s*(k|mil)?\s+(en|para|de|con)\b/i.test(lower);
-            const generalExpense = (lower.includes('gaste') || lower.includes('gasté') || lower.includes('puse') || lower.includes('pagué') || lower.includes('pague')) && /\d+/.test(lower);
+            const verbWithAmount = /^(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó])\b.*?\d+/i.test(lower);
+            const amountWithConcept = /^\$?\d+[\d.,]*\s*(k|mil)?\s*(?:en|para|de|con\s+)?\b/i.test(lower);
+            const generalExpense = (
+                lower.includes('gaste') || lower.includes('gasté') || lower.includes('gasto') || lower.includes('gastó') ||
+                lower.includes('puse') || lower.includes('pongo') ||
+                lower.includes('pagué') || lower.includes('pague') || lower.includes('pago') || lower.includes('pagó') ||
+                lower.includes('compré') || lower.includes('compre') || lower.includes('compro') || lower.includes('compró')
+            ) && /\d+/.test(lower);
 
-            if (verbWithAmount || amountWithConcept || generalExpense) {
+            // Reconocimiento de monto + rubro directo (ej: "25000 verduleria" o "30000 nafta")
+            const hasAmountAndCategory = /\d+/.test(lower) && /verdu|frut|carn|pollo|panader|alimento|comida|super|súper|nafta|clio|etios|ferreter|internet|luz|gas/i.test(lower);
+
+            if (verbWithAmount || amountWithConcept || generalExpense || hasAmountAndCategory) {
                 return 'EXPENSE';
             }
             if (/^(saldo|saldos|cuentas|balance)$/i.test(lower)) {

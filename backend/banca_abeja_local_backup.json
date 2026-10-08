@@ -1,6 +1,18 @@
 [
   {
     "date": "8/10/2026",
+    "memberId": "agustina",
+    "memberName": "Agustina",
+    "concept": "Verduleria",
+    "category": "Despensa & Alimentos",
+    "currency": "ARS",
+    "amount": 25000,
+    "scope": "comunitario",
+    "channel": "whatsapp",
+    "timestamp": 1791484901000
+  },
+  {
+    "date": "8/10/2026",
     "memberId": "ramiro",
     "memberName": "Ramiro",
     "concept": "Verduleria",
