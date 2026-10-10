@@ -291,7 +291,7 @@ class BancaAbejaBotService {
     }
 
     isBancaAbejaTrigger(text, chatName = '', chatId = null, senderName = '') {
-        const allIdentifiers = [senderName, chatId].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
+        const allIdentifiers = [senderName, chatId, chatName].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
         const isKnownMember = (membersCache || []).some(m => {
             const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
             if (cPhone && cPhone.length >= 8 && allIdentifiers.includes(cPhone.slice(-8))) return true;
@@ -299,7 +299,17 @@ class BancaAbejaBotService {
             if (mName && mName.length >= 3 && allIdentifiers.includes(mName)) return true;
             return false;
         }) || allIdentifiers.includes('agustina') || allIdentifiers.includes('cristian') || allIdentifiers.includes('ramiro');
-        const isCommunityChat = (chatName || '').toLowerCase().match(/banca|abeja|colmena|gastos/);
+
+        const lowerChat = (chatName || '').toLowerCase();
+        const isCommunityChat = lowerChat.includes('banca') || lowerChat.includes('abeja') || 
+            lowerChat.includes('colmena') || lowerChat.includes('gastos') ||
+            lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('hogar');
+
+        const isSelfChat = lowerChat.includes('(tú)') || lowerChat.includes('(tu)') || lowerChat.includes('(you)') ||
+            lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('guardados') ||
+            lowerChat.includes('notas') || lowerChat.includes('caja chica') ||
+            (chatId && (chatId.includes('27452476') || chatId.includes('26163119')));
+
         return !!this.checkTrigger({ 
             text, 
             chatName, 
@@ -307,7 +317,7 @@ class BancaAbejaBotService {
             senderName, 
             isKnownMember, 
             isCommunityChat, 
-            isSelfChat: false, 
+            isSelfChat, 
             isTargetMember: false, 
             isDirectBotChat: isKnownMember 
         });
@@ -424,14 +434,16 @@ class BancaAbejaBotService {
         }
 
         // Determinar tipo de contexto del chat
-        const isCommunityChat = isGroup && (
-            lowerChat.includes('banca') || lowerChat.includes('abeja') || 
-            lowerChat.includes('colmena') || lowerChat.includes('gastos')
-        );
+        const isCommunityChat = lowerChat.includes('banca') || lowerChat.includes('abeja') || 
+            lowerChat.includes('colmena') || lowerChat.includes('gastos') ||
+            lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('hogar');
 
-        // Chat de Ramiro consigo mismo (Note to self / Mensajes guardados)
+        // Chat de Ramiro consigo mismo (Note to self / Mensajes guardados / Cuentas propias como Vrde Club (Tú))
         const isSelfChat = msg.fromMe && (
-            chatJid.includes('27452476') || 
+            lowerChat.includes('(tú)') || lowerChat.includes('(tu)') || lowerChat.includes('(you)') ||
+            lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('guardados') ||
+            lowerChat.includes('notas') || lowerChat.includes('caja chica') ||
+            chatJid.includes('27452476') || chatJid.includes('26163119') ||
             chatJid === msg.from || 
             (msg.to && msg.from && msg.to.split('@')[0] === msg.from.split('@')[0])
         );
@@ -443,7 +455,10 @@ class BancaAbejaBotService {
         const isTargetMember = msg.fromMe && !isGroup && registeredMembers.some(m => {
             if (m.id === 'ramiro') return false;
             const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
-            return cPhone && cPhone.length >= 8 && chatJid.includes(cPhone.slice(-8));
+            const mName = (m.name || '').toLowerCase().trim();
+            const matchesPhone = cPhone && cPhone.length >= 8 && chatJid.includes(cPhone.slice(-8));
+            const matchesName = mName && mName.length >= 3 && lowerChat.includes(mName);
+            return matchesPhone || matchesName;
         });
 
         const trigger = this.checkTrigger({
@@ -563,13 +578,38 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
             isKnownMember = true;
         }
 
+        const lowerChat = (chatName || '').toLowerCase();
+        const isCommunityChat = lowerChat.includes('banca') || lowerChat.includes('abeja') || 
+            lowerChat.includes('colmena') || lowerChat.includes('gastos') ||
+            lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('hogar');
+
+        const isSelfChat = lowerChat.includes('(tú)') || lowerChat.includes('(tu)') || lowerChat.includes('(you)') ||
+            lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('guardados') ||
+            lowerChat.includes('notas') || lowerChat.includes('caja chica') ||
+            (chatId && (chatId.includes('27452476') || chatId.includes('26163119')));
+
+        const isDirectBotChat = isKnownMember;
+
+        const isTargetMember = registeredMembers.some(m => {
+            if (m.id === 'ramiro') return false;
+            const cPhone = (m.cleanPhone || m.phone || '').replace(/\D/g, '');
+            const mName = (m.name || '').toLowerCase().trim();
+            const matchesPhone = cPhone && cPhone.length >= 8 && chatId && chatId.includes(cPhone.slice(-8));
+            const matchesName = mName && mName.length >= 3 && lowerChat.includes(mName);
+            return matchesPhone || matchesName;
+        });
+
         const trigger = this.checkTrigger({
             text,
             chatName,
             chatId,
             senderName,
             memberId: resolvedMemberId,
-            isKnownMember
+            isKnownMember,
+            isCommunityChat,
+            isSelfChat,
+            isTargetMember,
+            isDirectBotChat
         });
 
         if (!trigger) return;
@@ -579,10 +619,10 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
             return;
         }
 
-        const parsedItems = parseWhatsAppExpenses(text, senderName, memberId);
+        const parsedItems = parseWhatsAppExpenses(text, senderName, resolvedMemberId);
         if (parsedItems.length > 0) {
             const isSession = this.isSessionActive(chatId);
-            await this.handleRegisterExpenses(chatId, client, parsedItems, senderName, memberId, isAudio, isSession);
+            await this.handleRegisterExpenses(chatId, client, parsedItems, senderName, resolvedMemberId, isAudio, isSession);
         }
     }
 
