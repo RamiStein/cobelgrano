@@ -43,6 +43,55 @@ function saveSessions(sessionsObj) {
     } catch(e) {}
 }
 
+// Envío seguro y resiliente de respuestas por WhatsApp (compatible con LID, grupos y self-chat)
+async function sendSafeReply(msg, client, targetChatId, textContent) {
+    if (!textContent) return;
+    if (msg && typeof msg.reply === 'function') {
+        try {
+            return await msg.reply(textContent);
+        } catch (e) {
+            console.warn('[Banca Abeja Bot] msg.reply falló, probando client.sendMessage:', e.message);
+        }
+    }
+    if (client && typeof client.sendMessage === 'function') {
+        let destId = targetChatId;
+        if (destId && destId.includes('@lid') && msg) {
+            try {
+                const contact = await msg.getContact();
+                if (contact && contact.number) {
+                    destId = `${contact.number}@c.us`;
+                }
+            } catch(e) {}
+        }
+        try {
+            return await client.sendMessage(destId, textContent);
+        } catch (err2) {
+            console.error('[Banca Abeja Bot] client.sendMessage falló:', err2.message);
+        }
+    }
+}
+
+// Resuelve dinámicamente el Elemento y la Billetera para la transacción
+function resolveElementForExpense(item) {
+    const text = ((item.concept || '') + ' ' + (item.category || '')).toLowerCase();
+    if (text.includes('clio') || text.includes('nafta') || text.includes('combustible') || text.includes('gasoil') || text.includes('gnc') || text.includes('peaje')) {
+        return { id: 'elem-clio', name: 'Clio', walletId: 'wallet-elementales', icon: '🚗' };
+    }
+    if (text.includes('feria') || text.includes('puesto') || text.includes('stand') || text.includes('gazeb')) {
+        return { id: 'elem-feria', name: 'Feria Comunitaria', walletId: 'wallet-elementales', icon: '🎪' };
+    }
+    if (text.includes('ferreter') || text.includes('bomba') || text.includes('herramienta') || text.includes('hábitat') || text.includes('habitat') || text.includes('obra') || text.includes('mantenimiento') || text.includes('plomer')) {
+        return { id: 'elem-habitat', name: 'Hábitat & Mantenimiento', walletId: 'wallet-elementales', icon: '🏡' };
+    }
+    if (text.includes('huerta') || text.includes('compost') || text.includes('plantin') || text.includes('plantín') || text.includes('semilla')) {
+        return { id: 'elem-huerta', name: 'Huerta Agroecológica', walletId: 'wallet-vrde', icon: '🌱' };
+    }
+    if (item.scope === 'individual') {
+        return { id: 'elem-personal-ramiro', name: 'Gastos Personales Ramiro', walletId: 'wallet-personal-ramiro', icon: '💼' };
+    }
+    return { id: 'elem-comida', name: 'Comida & Despensa', walletId: 'wallet-elementales', icon: '🥗' };
+}
+
 // Carga y sincronización dinámica de miembros de Banca Abeja (Firestore banca_abeja_members)
 let membersCache = [];
 let lastMembersFetch = 0;
@@ -69,7 +118,7 @@ async function getRegisteredMembers() {
     if (membersCache.length === 0) {
         membersCache = [
             { id: 'ramiro', name: 'Ramiro', phone: '+54 9 11 2745-2476', cleanPhone: '5491127452476' },
-            { id: 'agustina', name: 'Agustina', phone: '+54 9 11 2649-5598', cleanPhone: '5491126495598' },
+            { id: 'agustina', name: 'Agustina', phone: '+54 9 11 2649-5598', cleanPhone: '5491126495598', lid: '183412300230685' },
             { id: 'cristian', name: 'Cristian', phone: '+54 9 11 4974-8673', cleanPhone: '5491149748673' }
         ];
     }
@@ -149,19 +198,23 @@ function parseWhatsAppExpenses(rawText, defaultSenderName, defaultMemberId = 'am
                     category = 'Movilidad (Etios)';
                 } else if (/nafta|combustible|\bauto\b|gasoil|peaje|estacionamiento|remis|uber|cabify|taxi|colectivo|sube|gnc|taller|mec[aá]nic/i.test(lowerClause)) {
                     category = 'Movilidad';
-                } else if (/ferreter[ií]a|bomba|herramienta|huerta|tierra|obra|plomer|electric|pintur|limpieza|lavandina|jab[oó]n|gasista|mantenimiento/i.test(lowerClause)) {
+                } else if (/feria|puesto|stand|gazeb/i.test(lowerClause)) {
+                    category = 'Feria Comunitaria';
+                } else if (/huerta|compost|plantin|plant[ií]n|lombriz|bokashi/i.test(lowerClause)) {
+                    category = 'Huerta Agroecológica';
+                } else if (/ferreter[ií]a|bomba|herramienta|tierra|obra|plomer|electric|pintur|limpieza|lavandina|jab[oó]n|gasista|mantenimiento/i.test(lowerClause)) {
                     category = 'Hábitat & Mantenimiento';
                 } else if (/\bluz\b|\bgas\b|\binternet\b|\bstarlink\b|\bagua\b|\bseguro\b|edenor|metrogas|aysa|fibertel|personal|claro|movistar|abl|arba|expensas/i.test(lowerClause)) {
                     category = 'Servicios';
-                } else if (/alimento|verdu|frut|comida|arepa|s[uú]per|carn|pollo|panader|diet[eé]tica|\bpan\b|\bleche\b|\bhuevo|almac[eé]n|mercado|queso/i.test(lowerClause)) {
+                } else if (/alimento|verdu|frut|comida|arepa|s[uú]per|carn|pollo|panader|diet[eé]tica|\bpan\b|\bleche\b|\bhuevo|almac[eé]n|mercado|queso|yerba|caf[eé]|harina|arroz|fideo|ma[ií]z|bolsa|gr\b|gramo|kilo|kg\b/i.test(lowerClause)) {
                     category = 'Despensa & Alimentos';
                 }
 
                 let concept = clause
                     .replace(rawNumStr, '')
                     .replace(/^(#abeja|banca abeja|abeja|\/gasto)\s+/i, '')
-                    .replace(/\b(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó])\b\s*(?:en|para|de)?\s*/gi, '')
-                    .replace(/^(para|en|de|con)\s+/i, '')
+                    .replace(/\b(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó]|cost[oó]|cost[eé]|sali[oó]|vale|cuesta|precio)\b\s*(?:en|para|de)?\s*/gi, '')
+                    .replace(/^(para|en|de|con|los|las|el|la|un|una|unos|unas)\s+/i, '')
                     .replace(/\s+(con|para|en|de)$/i, '')
                     .replace(/\s*(usd|dolares|dólares|u\$s|pesos|abejas|horas)\s*/gi, '')
                     .trim();
@@ -269,18 +322,19 @@ class BancaAbejaBotService {
                 return 'BALANCE';
             }
 
-            const verbWithAmount = /^(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó])\b.*?\d+/i.test(lower);
-            const amountWithConcept = /^\$?\d+[\d.,]*\s*(k|mil)?\s*(?:en|para|de|con\s+)?\b/i.test(lower);
+            const verbWithAmount = /^(gast[eéóo]|gasto|puse|pongo|compr[eéóo]|compro|pagu[eé]|pag[oó]|cost[oó]|cost[eé]|sali[oó]|vale|cuesta)\b.*?\d+/i.test(lower);
+            const amountWithConcept = /^\$?\d+[\d.,]*\s*(k|mil)?\s*(?:en|para|de|con|los|las|el|la|por|el\s+kg|los\s+\d+gr)?\b/i.test(lower);
             const generalExpense = (
                 lower.includes('gaste') || lower.includes('gasté') || lower.includes('gasto') || lower.includes('gastó') ||
                 lower.includes('puse') || lower.includes('pongo') ||
                 lower.includes('pagué') || lower.includes('pague') || lower.includes('pago') || lower.includes('pagó') ||
-                lower.includes('compré') || lower.includes('compre') || lower.includes('compro') || lower.includes('compró')
+                lower.includes('compré') || lower.includes('compre') || lower.includes('compro') || lower.includes('compró') ||
+                lower.includes('costo') || lower.includes('costó') || lower.includes('coste') ||
+                lower.includes('salió') || lower.includes('salio') || lower.includes('precio') || lower.includes('cuesta')
             ) && /\d+/.test(lower);
 
-            // Reconocimiento de monto + rubro directo (ej: "25000 verduleria" o "30000 nafta")
-            // Usamos \bgas\b para evitar falsos positivos con palabras que contengan "gas"
-            const hasAmountAndCategory = /\d+/.test(lower) && /verdu|frut|carn|pollo|panader|alimento|comida|super|súper|nafta|clio|etios|ferreter|internet|luz|\bgas\b/i.test(lower);
+            // Reconocimiento de monto + rubro directo (ej: "25000 verduleria", "3000 yerba", "4500 los 100gr")
+            const hasAmountAndCategory = /\d+/.test(lower) && /verdu|frut|carn|pollo|panader|alimento|comida|super|súper|nafta|clio|etios|ferreter|internet|luz|\bgas\b|yerba|caf[eé]|ma[ií]z|bolsa|gr\b|gramo|kilo|kg\b|feria|puesto/i.test(lower);
 
             if (verbWithAmount || amountWithConcept || generalExpense || hasAmountAndCategory) {
                 return 'EXPENSE';
@@ -342,6 +396,9 @@ class BancaAbejaBotService {
         const text = rawText.trim();
         if (!text) return;
 
+        // Evitar que el bot reaccione a sus propios mensajes de confirmación o reportes
+        if (text.startsWith('🐝') || text.startsWith('📊') || text.startsWith('⚠️')) return;
+
         // 2. Descartar base64 y mensajes gigantes
         if (text.length > 250) return;
         if (text.startsWith('/j/') || text.startsWith('/9j/') || text.startsWith('data:') || /^[\w+/=]{50,}$/.test(text.replace(/\s+/g, ''))) {
@@ -349,12 +406,16 @@ class BancaAbejaBotService {
         }
 
         // Chat de destino para la respuesta (si es fromMe, responder a msg.to)
-        const chatJid = msg.fromMe ? (msg.to || msg.from) : msg.from;
+        let chatJid = msg.fromMe ? (msg.to || msg.from) : msg.from;
 
         let chatName = 'Directo';
+        let chat = null;
         try {
-            const chat = await msg.getChat();
-            chatName = chat?.name || chat?.formattedTitle || (chatJid.includes('@g.us') ? 'Grupo' : 'Directo');
+            chat = await msg.getChat();
+            if (chat && chat.id) {
+                chatJid = chat.id._serialized || chatJid;
+            }
+            chatName = chat?.name || chat?.formattedTitle || (chatJid && chatJid.includes('@g.us') ? 'Grupo' : 'Directo');
         } catch(e) {}
 
         const lowerChat = (chatName || '').toLowerCase();
@@ -443,7 +504,8 @@ class BancaAbejaBotService {
             lowerChat.includes('(tú)') || lowerChat.includes('(tu)') || lowerChat.includes('(you)') ||
             lowerChat.includes('vrde') || lowerChat.includes('elementales') || lowerChat.includes('guardados') ||
             lowerChat.includes('notas') || lowerChat.includes('caja chica') ||
-            chatJid.includes('27452476') || chatJid.includes('26163119') ||
+            (chat && (chat.isSelf || chat.isMe)) ||
+            (chatJid && (chatJid.includes('27452476') || chatJid.includes('26163119'))) ||
             chatJid === msg.from || 
             (msg.to && msg.from && msg.to.split('@')[0] === msg.from.split('@')[0])
         );
@@ -493,7 +555,7 @@ Este chat quedó habilitado durante *2 horas* para registrar gastos y consultar 
 • *Para pausar:* _/desactivar_ o _/pausar_
 
 🌐 Panel en vivo: https://bancaabeja.org`;
-            await client.sendMessage(chatJid, activateMsg);
+            await sendSafeReply(msg, client, chatJid, activateMsg);
             return;
         }
 
@@ -502,7 +564,7 @@ Este chat quedó habilitado durante *2 horas* para registrar gastos y consultar 
             this.deactivateSession(chatJid);
             const pauseMsg = `🐝 *Modo Banca Abeja PAUSADO.*
 El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier momento escribiendo */activar* o anteponiendo *#abeja* a tu gasto.`;
-            await client.sendMessage(chatJid, pauseMsg);
+            await sendSafeReply(msg, client, chatJid, pauseMsg);
             return;
         }
 
@@ -520,13 +582,13 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
   • O con prefijo rápido: _"#abeja gasté 100.000"_
 
 🌐 Panel y balances en vivo: https://bancaabeja.org`;
-            await client.sendMessage(chatJid, helpMsg);
+            await sendSafeReply(msg, client, chatJid, helpMsg);
             return;
         }
 
         // Caso D: Balance
         if (trigger === 'BALANCE') {
-            await this.handleBalanceQuery(chatJid, client);
+            await this.handleBalanceQuery(chatJid, client, msg);
             return;
         }
 
@@ -535,7 +597,7 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
             const parsedItems = parseWhatsAppExpenses(text, senderName, memberId);
             if (parsedItems.length > 0) {
                 const isSession = this.isSessionActive(chatJid);
-                await this.handleRegisterExpenses(chatJid, client, parsedItems, senderName, memberId, false, isSession);
+                await this.handleRegisterExpenses(chatJid, client, parsedItems, senderName, memberId, false, isSession, msg);
             }
         }
     }
@@ -622,12 +684,12 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
         const parsedItems = parseWhatsAppExpenses(text, senderName, resolvedMemberId);
         if (parsedItems.length > 0) {
             const isSession = this.isSessionActive(chatId);
-            await this.handleRegisterExpenses(chatId, client, parsedItems, senderName, resolvedMemberId, isAudio, isSession);
+            await this.handleRegisterExpenses(chatId, client, parsedItems, senderName, resolvedMemberId, isAudio, isSession, null);
         }
     }
 
     // Guardar gastos y responder confirmación
-    async handleRegisterExpenses(chatId, client, parsedItems, senderName, memberId, isAudio = false, hasSession = true) {
+    async handleRegisterExpenses(chatId, client, parsedItems, senderName, memberId, isAudio = false, hasSession = true, msg = null) {
         try {
             const now = new Date();
             const dateStr = now.toLocaleDateString('es-AR');
@@ -636,10 +698,12 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
             const currSymbol = currency === 'USD' ? 'US$' : currency === 'ABEJA' ? '🐝' : '$';
 
             const summaryLines = [];
+            const primaryElem = resolveElementForExpense(parsedItems[0]);
 
             for (const item of parsedItems) {
                 totalSum += item.amount;
-                summaryLines.push(`• *${item.concept}:* ${currSymbol}${item.amount.toLocaleString('es-AR')} _(${item.category})_`);
+                const elem = resolveElementForExpense(item);
+                summaryLines.push(`• *${item.concept}:* ${currSymbol}${item.amount.toLocaleString('es-AR')} ➔ ${elem.icon} *${elem.name}*`);
 
                 const txRecord = {
                     date: dateStr,
@@ -647,6 +711,9 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
                     memberName: senderName,
                     concept: item.concept,
                     category: item.category,
+                    elementId: elem.id,
+                    elementName: elem.name,
+                    walletId: elem.walletId,
                     currency: item.currency,
                     amount: item.amount,
                     scope: item.scope,
@@ -657,35 +724,59 @@ El chat vuelve a su modo personal habitual. Podés reactivarlo en cualquier mome
                 // 1. Guardar en respaldo local seguro
                 saveLocalTx(txRecord);
 
-                // 2. Guardar en Firestore colección compartida en background (sin bloquear respuesta WhatsApp)
+                // 2. Guardar en Firestore colección compartida legacy
                 addDoc(collection(db, 'banca_abeja_transactions'), txRecord).catch((firestoreErr) => {
                     if (firestoreErr.code !== 'resource-exhausted') {
-                        console.warn('[Banca Abeja Bot] Aviso Firestore:', firestoreErr.message);
+                        console.warn('[Banca Abeja Bot] Aviso Firestore txs:', firestoreErr.message);
+                    }
+                });
+
+                // 3. Guardar en colección de elementos banca_abeja_element_transactions
+                const elemTx = {
+                    id: `etx-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                    elementId: elem.id,
+                    type: 'expense',
+                    amount: item.amount,
+                    concept: item.concept,
+                    memberId: item.memberId || memberId || senderName.toLowerCase(),
+                    memberName: senderName,
+                    currency: item.currency,
+                    timestamp: Date.now(),
+                    date: dateStr,
+                    channel: isAudio ? 'whatsapp_audio' : 'whatsapp'
+                };
+
+                addDoc(collection(db, 'banca_abeja_element_transactions'), elemTx).catch((elemErr) => {
+                    if (elemErr.code !== 'resource-exhausted') {
+                        console.warn('[Banca Abeja Bot] Aviso Firestore elem_tx:', elemErr.message);
                     }
                 });
             }
 
             let tipMsg = '';
-            if (!hasSession && !chatId.includes('@g.us')) {
+            if (!hasSession && (!chatId || !chatId.includes('@g.us'))) {
                 tipMsg = `\n_(Tip: Podés mandar */activar* para abrir una sesión continua de 2 horas sin escribir comandos)_`;
             }
 
             const replyMessage = `🐝 *¡Anotado en Banca Abeja!*${isAudio ? ' 🎙️ (Nota de voz)' : ''}
 ${summaryLines.join('\n')}
 
-💰 *Total:* ${currSymbol}${totalSum.toLocaleString('es-AR')} (Pagó ${senderName})
-📊 Actualizado en tiempo real en: https://bancaabeja.org${tipMsg}`;
+💰 *Total:* ${currSymbol}${totalSum.toLocaleString('es-AR')} (Pagó / Informó ${senderName})
+👛 *Billetera:* Elementales
 
-            await client.sendMessage(chatId, replyMessage);
+📲 *Ver o administrar en tu Billetera:*
+https://bancaabeja.org/?wallet=${primaryElem.walletId}&element=${primaryElem.id}${tipMsg}`;
+
+            await sendSafeReply(msg, client, chatId, replyMessage);
             console.log(`[Banca Abeja Bot] ✓ ${parsedItems.length} gastos guardados y confirmados a ${senderName} en [${chatId}].`);
         } catch (err) {
             console.error('[Banca Abeja Bot] Error registrando gastos:', err.message);
-            await client.sendMessage(chatId, `⚠️ Hubo un error guardando el gasto en Banca Abeja: ${err.message}`);
+            await sendSafeReply(msg, client, chatId, `⚠️ Hubo un error guardando el gasto en Banca Abeja: ${err.message}`);
         }
     }
 
     // Consultar balances y responder
-    async handleBalanceQuery(chatId, client) {
+    async handleBalanceQuery(chatId, client, msg = null) {
         try {
             const txs = [];
             try {
@@ -708,7 +799,7 @@ ${summaryLines.join('\n')}
             });
 
             if (txs.length === 0) {
-                await client.sendMessage(chatId, `🐝 *Banca Abeja - Estado de la Colmena*
+                await sendSafeReply(msg, client, chatId, `🐝 *Banca Abeja - Estado de la Colmena*
 Aún no hay movimientos registrados este período.
 Podés cargar el primero diciendo por ejemplo: _"Gasté 25.000 en verdura"_`);
                 return;
@@ -762,11 +853,11 @@ ${balances.length > 0 ? balances.join('\n') : '• Sin aportes en ARS registrado
 ${otherCurrencies}
 👉 Panel y desglose completo en vivo: https://bancaabeja.org`;
 
-            await client.sendMessage(chatId, reply);
+            await sendSafeReply(msg, client, chatId, reply);
             console.log('[Banca Abeja Bot] ✓ Balance enviado por WhatsApp.');
         } catch (err) {
             console.error('[Banca Abeja Bot] Error consultando saldos:', err.message);
-            await client.sendMessage(chatId, `⚠️ Error consultando saldos: ${err.message}`);
+            await sendSafeReply(msg, client, chatId, `⚠️ Error consultando saldos: ${err.message}`);
         }
     }
 }

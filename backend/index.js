@@ -224,6 +224,13 @@ async function start() {
             }
         } catch(e) {}
 
+        // 🐝 Bot de Banca Abeja (registro de gastos propios / self-chat / grupos)
+        try {
+            await bancaAbejaBotService.processMessage(msg, client);
+        } catch (botErr) {
+            console.error('[Banca Abeja Bot] Error en message_create:', botErr.message);
+        }
+
         const msgData = {
             id: serializedId,
             fromMe: true,
